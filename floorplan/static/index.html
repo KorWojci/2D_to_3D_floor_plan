@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Floor plan 2D → 3D</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M1 1h14v14H1z M3 3v10h4V9h2v4h4V3z%22 fill=%22%232f6fdb%22 fill-rule=%22evenodd%22/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --line: #e2e2de;
+    --accent: #2f6fdb; --ok: #1e8449; --warn: #b9770e; --err: #c0392b; --code: #fafaf8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151516; --panel: #1f1f21; --text: #ececee; --muted: #9a9aa0; --line: #333337;
+            --accent: #5b8fef; --ok: #52be80; --warn: #f0b429; --err: #ec7063; --code: #19191b; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header span { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 16px; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 22px 12px; text-align: center; cursor: pointer; color: var(--muted); transition: border-color .15s; }
+  .drop.over, .drop:hover { border-color: var(--accent); color: var(--text); }
+  .drop strong { color: var(--text); display: block; margin-bottom: 4px; word-break: break-all; }
+  input[type=file] { display: none; }
+  details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; margin-top: 10px; }
+  label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+  input[type=number], input[type=text], select { width: 100%; padding: 6px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); color: var(--text); font: inherit; }
+  .fmts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 2px; }
+  .fmts label { flex-direction: row; align-items: center; gap: 5px; color: var(--text); font-size: 13px; }
+  .fmts label.na { color: var(--muted); text-decoration: line-through; }
+  .sub { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  button { font: inherit; border: 0; border-radius: 7px; padding: 9px 14px; cursor: pointer; background: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); font-weight: 500; padding: 6px 10px; }
+  #go { width: 100%; margin-top: 14px; }
+  #log { background: var(--code); border: 1px solid var(--line); border-radius: 8px; height: 230px; overflow: auto; padding: 8px 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+  #log .step { color: var(--accent); font-weight: 600; margin-top: 4px; }
+  #log .warn { color: var(--warn); }
+  #log .error { color: var(--err); font-weight: 600; }
+  #log .t { color: var(--muted); }
+  .right { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+  .tabs button { background: transparent; color: var(--muted); padding: 6px 10px; font-weight: 500; border-radius: 6px; }
+  .tabs button.on { background: var(--code); color: var(--text); border: 1px solid var(--line); }
+  .tabs .spacer { flex: 1; }
+  .view { height: 520px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--code); position: relative; }
+  .view > div { width: 100%; height: 100%; }
+  #v2d { overflow: auto; background: #fff; }
+  #v2d svg { width: 100%; height: 100%; }
+  #v2d.hide-computed #dims-computed, #v2d.hide-derived #dims-derived, #v2d.hide-stated #dims-stated { display: none; }
+  #vrep { overflow: auto; padding: 12px; }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+  .toggles { display: flex; gap: 10px; font-size: 12px; }
+  .toggles label { flex-direction: row; align-items: center; gap: 4px; color: var(--text); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 14px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); }
+  .badge.dimensions, .badge.header, .badge.user { color: var(--ok); border-color: var(--ok); }
+  .badge.estimated { color: var(--warn); border-color: var(--warn); }
+  #files { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px; }
+  #files a { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; text-decoration: none; color: var(--text); }
+  #files a span { overflow-wrap: anywhere; min-width: 0; }
+  #files small { white-space: nowrap; }
+  #files a:hover { border-color: var(--accent); }
+  #files small { color: var(--muted); }
+  .more { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .legend { font-size: 12px; color: var(--muted); }
+  .legend b.s { color: #333; } .legend b.d { color: #1e8449; } .legend b.c { color: #2471a3; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/static/vendor/three/three.module.js",
+  "three/addons/": "/static/vendor/three/addons/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <h1>Floor plan 2D → 3D</h1>
+  <span>walls · door recesses · window recesses — dimensions taken from the drawing</span>
+</header>
+<main>
+  <section>
+    <h2>1 · Import</h2>
+    <div class="drop" id="drop">
+      <strong id="fname">Drop a floor plan here or click</strong>
+      <span id="accepted">DXF, DWG, PDF, SVG, PNG/JPG…, OBJ/STL/GLB/IFC…</span>
+    </div>
+    <input type="file" id="file">
+
+    <details>
+      <summary>Heights</summary>
+      <div class="grid">
+        <label>Wall height (mm)<input type="number" id="wall_height" value="2700" min="1000" step="10"></label>
+        <label>Door height (mm)<input type="number" id="door_height" value="2100" min="500" step="10"></label>
+        <label>Window sill (mm)<input type="number" id="window_sill" value="900" min="0" step="10"></label>
+        <label>Window head (mm)<input type="number" id="window_head" value="2100" min="100" step="10"></label>
+        <label class="check"><input type="checkbox" id="floor" checked> Floor surface</label>
+      </div>
+    </details>
+    <details>
+      <summary>Scale &amp; units (only if the drawing has no dimensions)</summary>
+      <div class="grid">
+        <label>Units of numbers
+          <select id="units"><option value="auto">auto</option><option>mm</option><option>cm</option><option>m</option><option>in</option><option>ft</option></select>
+        </label>
+        <label>Paper scale 1 :<input type="number" id="paper_scale" placeholder="e.g. 50, 100" min="1"></label>
+        <label>Known overall width (mm)<input type="number" id="known_width_mm" placeholder="outer walls, X" min="1"></label>
+        <label>Known overall depth (mm)<input type="number" id="known_height_mm" placeholder="outer walls, Y" min="1"></label>
+        <label>Image DPI (scans)<input type="number" id="dpi" placeholder="from file" min="1"></label>
+      </div>
+    </details>
+    <details>
+      <summary>Detection</summary>
+      <div class="grid">
+        <label>Min wall thickness<input type="number" id="min_wall_thickness" value="60" min="1"></label>
+        <label>Max wall thickness<input type="number" id="max_wall_thickness" value="550" min="10"></label>
+        <label>Min opening width<input type="number" id="min_opening" value="350" min="10"></label>
+        <label>Max opening width<input type="number" id="max_opening" value="3500" min="100"></label>
+        <label>Wall layer names<input type="text" id="wall_layers" placeholder="auto (e.g. A-WALL)"></label>
+        <label>Door layer names<input type="text" id="door_layers" placeholder="auto"></label>
+        <label>Window layer names<input type="text" id="window_layers" placeholder="auto"></label>
+        <label>3D import cut height<input type="number" id="slice_height" value="1300" min="100"></label>
+      </div>
+    </details>
+
+    <h2 style="margin-top:16px">2 · Output formats</h2>
+    <div class="sub" style="margin-top:0">2D drawing</div>
+    <div class="fmts" id="f2d"></div>
+    <div class="sub">3D model</div>
+    <div class="fmts" id="f3d"></div>
+    <button id="go" disabled>Convert</button>
+    <div class="sub" id="conv"></div>
+  </section>
+
+  <div class="right">
+    <section>
+      <h2>Log</h2>
+      <div id="log"><span class="t">Waiting for a file…</span></div>
+    </section>
+    <section>
+      <div class="tabs">
+        <button data-tab="v3d" class="on">3D preview</button>
+        <button data-tab="v2d">2D plan</button>
+        <button data-tab="vrep">Report</button>
+        <span class="spacer"></span>
+        <div class="toggles" id="dimtoggles" hidden>
+          <label><input type="checkbox" data-dim="stated" checked> written</label>
+          <label><input type="checkbox" data-dim="derived" checked> derived</label>
+          <label><input type="checkbox" data-dim="computed" checked> computed</label>
+        </div>
+      </div>
+      <div class="view">
+        <div id="v3d"></div>
+        <div id="v2d" hidden></div>
+        <div id="vrep" hidden></div>
+        <div class="empty" id="empty">The preview appears here after conversion</div>
+      </div>
+      <p class="legend">Dimensions: <b class="s">black</b> written in the drawing · <b class="d">green</b> derived from other dimensions · <b class="c">blue dashed</b> computed from the calibrated geometry. All values in millimetres.</p>
+    </section>
+    <section>
+      <h2>Downloads</h2>
+      <ul id="files"><li class="legend">No files yet.</li></ul>
+      <div class="more" id="more" hidden>
+        <select id="morefmt"></select>
+        <button class="ghost" id="morebtn">Export this format too</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+const $ = (id) => document.getElementById(id);
+let file = null, job = null, formats = null;
+
+// ------------------------------------------------------------ formats
+fetch("/api/formats").then(r => r.json()).then(f => {
+  formats = f;
+  const exts = Object.keys(f.import);
+  $("file").accept = exts.join(",");
+  $("accepted").textContent = exts.map(e => e.slice(1).toUpperCase()).join(" · ");
+  const mk = (box, group) => {
+    for (const [k, v] of Object.entries(group)) {
+      const l = document.createElement("label");
+      l.title = v.label + (v.available ? "" : " — converter not installed on the server");
+      if (!v.available) l.className = "na";
+      l.innerHTML = `<input type="checkbox" value="${k}" ${f.default_export.includes(k) && v.available ? "checked" : ""} ${v.available ? "" : "disabled"}>${k === "dxf3d" ? "DXF 3D" : k.toUpperCase()}`;
+      box.appendChild(l);
+      const o = document.createElement("option"); o.value = k; o.textContent = v.label; o.disabled = !v.available;
+      $("morefmt").appendChild(o);
+    }
+  };
+  mk($("f2d"), f.export["2d"]); mk($("f3d"), f.export["3d"]);
+  $("conv").textContent = "DWG converter on server: " + f.dwg_converter;
+});
+
+// ------------------------------------------------------------ file input
+const drop = $("drop");
+drop.onclick = () => $("file").click();
+$("file").onchange = (e) => setFile(e.target.files[0]);
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); setFile(e.dataTransfer.files[0]); };
+function setFile(f) {
+  if (!f) return;
+  file = f; $("fname").textContent = f.name; $("go").disabled = false;
+}
+
+// ------------------------------------------------------------ log
+function addLog(e) {
+  const d = document.createElement("div");
+  d.className = e.level;
+  d.innerHTML = `<span class="t">${e.t.toFixed(2).padStart(6)}s </span>`;
+  d.appendChild(document.createTextNode((e.level === "warn" ? "⚠ " : e.level === "error" ? "✖ " : e.level === "step" ? "▸ " : "  ") + e.msg));
+  const log = $("log"); log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+
+// ------------------------------------------------------------ convert
+const NUMS = ["wall_height","door_height","window_sill","window_head","paper_scale","known_width_mm","known_height_mm","dpi",
+              "min_wall_thickness","max_wall_thickness","min_opening","max_opening","slice_height"];
+$("go").onclick = async () => {
+  if (!file) return;
+  const opts = { units: $("units").value, floor: $("floor").checked,
+                 wall_layers: $("wall_layers").value, door_layers: $("door_layers").value, window_layers: $("window_layers").value };
+  for (const k of NUMS) if ($(k).value !== "") opts[k] = Number($(k).value);
+  const fmts = [...document.querySelectorAll(".fmts input:checked")].map(i => i.value);
+  const fd = new FormData();
+  fd.append("file", file); fd.append("options", JSON.stringify(opts)); fd.append("formats", fmts.join(","));
+  $("go").disabled = true; $("log").innerHTML = ""; $("files").innerHTML = '<li class="legend">Working…</li>'; $("more").hidden = true;
+  addLog({ t: 0, level: "info", msg: `Uploading ${file.name}…` });
+  const r = await fetch("/api/jobs", { method: "POST", body: fd });
+  if (!r.ok) { addLog({ t: 0, level: "error", msg: (await r.json()).detail || r.statusText }); $("go").disabled = false; return; }
+  job = (await r.json()).id;
+  $("log").innerHTML = "";
+  const es = new EventSource(`/api/jobs/${job}/events`);
+  es.addEventListener("log", (ev) => addLog(JSON.parse(ev.data)));
+  es.addEventListener("done", (ev) => { es.close(); finished(JSON.parse(ev.data)); });
+  es.addEventListener("error", (ev) => {
+    es.close(); $("go").disabled = false;
+    if (ev.data) { const j = JSON.parse(ev.data); $("files").innerHTML = `<li class="legend">${esc(j.error)}</li>`; }
+  });
+};
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : (n / 1024).toFixed(1) + " kB";
+
+function renderFiles(j) {
+  $("files").innerHTML = j.files.length ? "" : '<li class="legend">No files were produced.</li>';
+  for (const f of j.files) {
+    const li = document.createElement("li");
+    li.innerHTML = `<a href="/api/jobs/${j.id}/files/${encodeURIComponent(f.name)}" download><span>${esc(f.name)}</span><small>${kb(f.size)}</small></a>`;
+    $("files").appendChild(li);
+  }
+  $("more").hidden = false;
+}
+
+async function finished(j) {
+  $("go").disabled = false;
+  renderFiles(j);
+  $("empty").hidden = true;
+  load3d(`/api/jobs/${j.id}/preview/preview.glb?${Date.now()}`);
+  const svg = await (await fetch(`/api/jobs/${j.id}/preview/preview.svg`)).text();
+  $("v2d").innerHTML = svg;
+  report(j.summary);
+}
+
+$("morebtn").onclick = async () => {
+  if (!job) return;
+  $("morebtn").disabled = true;
+  const r = await fetch(`/api/jobs/${job}/export`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                     body: JSON.stringify({ formats: [$("morefmt").value] }) });
+  const j = await r.json();
+  $("morebtn").disabled = false;
+  $("log").innerHTML = ""; j.log.forEach(addLog);
+  if (r.ok) renderFiles(j);
+};
+
+// ------------------------------------------------------------ report
+function report(s) {
+  if (!s) return;
+  const c = s.calibration || {};
+  const conf = c.confidence || "";
+  let h = `<table><tr><th>Overall size</th><td class="num">${s.size_mm[0].toFixed(0)} × ${s.size_mm[1].toFixed(0)} mm</td></tr>
+  <tr><th>Wall height</th><td class="num">${s.wall_height.toFixed(0)} mm</td></tr>
+  <tr><th>Scale source</th><td>${esc(c.method || "")} <span class="badge ${conf}">${conf === "estimated" ? "estimated – check!" : "reliable"}</span></td></tr>
+  <tr><th>Drawing unit</th><td class="num">${(c.mm_per_drawing_unit || 0).toPrecision(6)} mm</td></tr>
+  <tr><th>Dimensions</th><td>${Object.entries(s.dimensions).map(([k, v]) => `${v} ${k}`).join(" · ")}</td></tr></table>`;
+  if (s.derived.length) {
+    h += `<table><tr><th>Missing dimensions derived from others</th><th class="num">mm</th></tr>` +
+      s.derived.map(d => `<tr><td>(${d.p1.map(v => v.toFixed(0))}) → (${d.p2.map(v => v.toFixed(0))})</td><td class="num">${d.value.toFixed(1)}</td></tr>`).join("") + "</table>";
+  }
+  h += `<table><tr><th>Opening</th><th>Type</th><th class="num">Width</th><th class="num">Sill</th><th class="num">Head</th><th class="num">Depth</th><th>Evidence</th></tr>` +
+    s.openings.map(o => `<tr><td>${esc(o.id)}</td><td>${o.type}</td><td class="num">${o.width.toFixed(0)}</td><td class="num">${o.sill.toFixed(0)}</td><td class="num">${o.head.toFixed(0)}</td><td class="num">${o.depth.toFixed(0)}</td><td>${esc(o.evidence.join("; "))}</td></tr>`).join("") + "</table>";
+  h += `<table><tr><th>Wall</th><th class="num">Length</th><th class="num">Thickness</th></tr>` +
+    s.walls_list.map(w => `<tr><td>${esc(w.id)}</td><td class="num">${w.length.toFixed(0)}</td><td class="num">${w.thickness.toFixed(0)}</td></tr>`).join("") + "</table>";
+  if (s.warnings.length) h += `<table><tr><th>Warnings</th></tr>${s.warnings.map(w => `<tr><td>${esc(w)}</td></tr>`).join("")}</table>`;
+  $("vrep").innerHTML = h;
+}
+
+// ------------------------------------------------------------ tabs
+document.querySelectorAll(".tabs button[data-tab]").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button[data-tab]").forEach(x => x.classList.toggle("on", x === b));
+  for (const id of ["v3d", "v2d", "vrep"]) $(id).hidden = id !== b.dataset.tab;
+  $("dimtoggles").hidden = b.dataset.tab !== "v2d";
+  if (b.dataset.tab === "v3d") resize();
+});
+document.querySelectorAll("#dimtoggles input").forEach(i => i.onchange = () => $("v2d").classList.toggle("hide-" + i.dataset.dim, !i.checked));
+
+// ------------------------------------------------------------ 3D viewer
+const host = $("v3d");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+host.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+scene.background = new THREE.Color(dark ? 0x19191b : 0xf2f2ef);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 1000);
+camera.position.set(8, 10, 12);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x888877, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(6, 12, 4); scene.add(sun);
+const grid = new THREE.GridHelper(40, 40, 0x999999, dark ? 0x333333 : 0xdddddd); scene.add(grid);
+let model = null;
+function resize() {
+  const w = host.clientWidth || 800, h = host.clientHeight || 520;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(host);
+(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+
+function load3d(url) {
+  new GLTFLoader().load(url, (g) => {
+    if (model) scene.remove(model);
+    model = g.scene;
+    model.traverse(o => { if (o.isMesh) { o.material.side = THREE.DoubleSide; } });
+    const box = new THREE.Box3().setFromObject(model);
+    const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+    model.position.sub(new THREE.Vector3(c.x, box.min.y, c.z));
+    const edges = [];
+    model.traverse(o => { if (o.isMesh && o.name !== "floor") edges.push(o); });
+    for (const m of edges) {
+      const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, 20), new THREE.LineBasicMaterial({ color: 0x555555 }));
+      m.add(e);
+    }
+    scene.add(model);
+    const r = Math.max(size.x, size.z);
+    camera.position.set(r * 0.55, r * 0.9, r * 0.85);
+    controls.target.set(0, 0, 0); controls.update();
+    grid.scale.setScalar(Math.max(1, r / 30));
+    resize();
+  });
+}
+</script>
+</body>
+</html>
