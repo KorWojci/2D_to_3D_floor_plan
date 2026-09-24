@@ -240,13 +240,16 @@
       </details>
 
       <details class="pane settings">
-        <summary>Heights</summary>
+        <summary>Heights &amp; placeholders</summary>
         <div class="pane-body grid">
           <label>Wall height (mm)<input type="number" id="wall_height" value="2700" min="1000" step="10"></label>
           <label>Door height (mm)<input type="number" id="door_height" value="2100" min="500" step="10"></label>
           <label>Window sill (mm)<input type="number" id="window_sill" value="900" min="0" step="10"></label>
           <label>Window head (mm)<input type="number" id="window_head" value="2100" min="100" step="10"></label>
-          <label class="check"><input type="checkbox" id="floor" checked> Floor surface</label>
+          <label class="check"><input type="checkbox" id="floor" checked> Floor placeholder</label>
+          <label>Floor thickness (mm)<input type="number" id="floor_thickness" value="0" min="0" step="10" title="0 = flat surface"></label>
+          <label class="check"><input type="checkbox" id="ceiling" checked> Ceiling placeholder</label>
+          <label>Ceiling thickness (mm)<input type="number" id="ceiling_thickness" value="0" min="0" step="10" title="0 = flat surface"></label>
         </div>
       </details>
       <details class="pane settings">
@@ -270,7 +273,7 @@
           <label>Min wall thickness<input type="number" id="min_wall_thickness" value="60" min="1"></label>
           <label>Max wall thickness<input type="number" id="max_wall_thickness" value="550" min="10"></label>
           <label>Min opening width<input type="number" id="min_opening" value="350" min="10"></label>
-          <label>Max opening width<input type="number" id="max_opening" value="3500" min="100"></label>
+          <label>Max opening width<input type="number" id="max_opening" value="5000" min="100"></label>
           <label>Wall layers<input type="text" id="wall_layers" placeholder="auto (A-WALL…)"></label>
           <label>Door layers<input type="text" id="door_layers" placeholder="auto"></label>
           <label>Window layers<input type="text" id="window_layers" placeholder="auto"></label>
@@ -285,6 +288,10 @@
         <button data-tab="v2d" role="tab"><span class="ext" style="color:#e2c08d">2D</span>plan.svg</button>
         <button data-tab="vrep" role="tab"><span class="ext" style="color:#519aba">i</span>report.md</button>
         <span class="spacer"></span>
+        <div class="toggles" id="viewtoggles" title="Show / hide in the preview (exported files are not affected)">
+          <label><input type="checkbox" data-node="floor" checked> floor</label>
+          <label><input type="checkbox" data-node="ceiling"> ceiling</label>
+        </div>
         <div class="toggles" id="dimtoggles" hidden>
           <label><input type="checkbox" data-dim="stated" checked> written</label>
           <label><input type="checkbox" data-dim="derived" checked> derived</label>
@@ -383,10 +390,11 @@ function addLog(e) {
 
 // ------------------------------------------------------------ convert
 const NUMS = ["wall_height","door_height","window_sill","window_head","paper_scale","known_width_mm","known_height_mm","dpi",
-              "min_wall_thickness","max_wall_thickness","min_opening","max_opening","slice_height"];
+              "min_wall_thickness","max_wall_thickness","min_opening","max_opening","slice_height",
+              "floor_thickness","ceiling_thickness"];
 $("go").onclick = async () => {
   if (!file) return;
-  const opts = { units: $("units").value, floor: $("floor").checked,
+  const opts = { units: $("units").value, floor: $("floor").checked, ceiling: $("ceiling").checked,
                  wall_layers: $("wall_layers").value, door_layers: $("door_layers").value, window_layers: $("window_layers").value };
   for (const k of NUMS) if ($(k).value !== "") opts[k] = Number($(k).value);
   const fmts = [...document.querySelectorAll(".fmts input:checked")].map(i => i.value);
@@ -481,6 +489,7 @@ document.querySelectorAll(".tabs button[data-tab]").forEach(b => b.onclick = () 
   document.querySelectorAll(".tabs button[data-tab]").forEach(x => x.classList.toggle("on", x === b));
   for (const id of ["v3d", "v2d", "vrep"]) $(id).hidden = id !== b.dataset.tab;
   $("dimtoggles").hidden = b.dataset.tab !== "v2d";
+  $("viewtoggles").hidden = b.dataset.tab !== "v3d";
   if (b.dataset.tab === "v3d") resize();
 });
 document.querySelectorAll("#dimtoggles input").forEach(i => i.onchange = () => $("v2d").classList.toggle("hide-" + i.dataset.dim, !i.checked));
@@ -538,6 +547,15 @@ function resize() {
 new ResizeObserver(resize).observe(host);
 (function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
 
+function applyVisibility() {
+  document.querySelectorAll("#viewtoggles input").forEach(i => {
+    const n = model && model.getObjectByName(i.dataset.node);
+    i.disabled = !n;
+    if (n) n.visible = i.checked;
+  });
+}
+document.querySelectorAll("#viewtoggles input").forEach(i => i.onchange = applyVisibility);
+
 function load3d(url) {
   new GLTFLoader().load(url, (g) => {
     if (model) scene.remove(model);
@@ -547,12 +565,13 @@ function load3d(url) {
     const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
     model.position.sub(new THREE.Vector3(c.x, box.min.y, c.z));
     const edges = [];
-    model.traverse(o => { if (o.isMesh && o.name !== "floor") edges.push(o); });
+    model.traverse(o => { if (o.isMesh && o.name !== "floor" && o.name !== "ceiling") edges.push(o); });
     for (const m of edges) {
       const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, 20), new THREE.LineBasicMaterial({ color: 0x3c3c3c }));
       m.add(e);
     }
     scene.add(model);
+    applyVisibility();
     const r = Math.max(size.x, size.z);
     camera.position.set(r * 0.55, r * 0.9, r * 0.85);
     controls.target.set(0, 0, 0); controls.update();

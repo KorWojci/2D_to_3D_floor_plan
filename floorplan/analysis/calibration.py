@@ -216,6 +216,18 @@ def _choose_unit(values: list[float], extent_display: float, imperial: bool, log
     return u, k
 
 
+def _consensus(ratios: np.ndarray, weights: np.ndarray, tol: float) -> float:
+    """Ratio agreed on by most dimensions (weighted by length) - robust against mis-read
+    numbers and room-area labels, unlike a plain median when many values are wrong."""
+    best, best_w = float(np.median(ratios)), -1.0
+    for r in ratios:
+        inl = np.abs(ratios / r - 1) <= tol
+        w = float(weights[inl].sum())
+        if w > best_w:
+            best_w, best = w, float(np.median(ratios[inl]))
+    return best
+
+
 def _snap_k(k: float) -> Optional[tuple[str, float]]:
     for name, val in UNITS.items():
         if abs(k / val - 1) < 0.03:
@@ -235,7 +247,8 @@ def calibrate(d: Drawing, settings: Settings, log: Log, forced_scale: Optional[f
         cal.info["note"] = "scaled so that the walls' bounding box matches the size you entered"
         return cal
 
-    n_txt = extract_text_dimensions(d, log) if d.texts else 0
+    # (bitmaps: dimension texts were already measured on the image by the OCR step)
+    n_txt = extract_text_dimensions(d, log) if d.texts and not d.raster else 0
     if n_txt:
         log.info(f"Recognised {n_txt} dimension(s) written as text on dimension lines")
     dims = [m for m in d.dims if m.value and m.geom_length > extent_raw * 1e-4]
@@ -244,13 +257,17 @@ def calibrate(d: Drawing, settings: Settings, log: Log, forced_scale: Optional[f
     user_unit = settings.units if settings.units in UNITS else None
 
     if dims:
+        # dimensions may be written in different units ("3,35 m" next to "335"): compare
+        # explicit-unit values in mm and plain numbers in display units separately
         ratios = np.array([m.value / m.geom_length for m in dims])
-        med = float(np.median(ratios))
+        med = _consensus(ratios, np.array([m.geom_length for m in dims]), 0.04 if d.raster else 0.02)
         good = []
         rejected = []
         for m, rr in zip(dims, ratios):
             tol = 0.12 if m.source == "entity" else 0.03
             (good if abs(rr / med - 1) <= tol else rejected).append(m)
+        for m in rejected:
+            m.source += ":rejected"
         for m in rejected[:8]:
             log.warn(f"Dimension '{m.text}' disagrees with the drawing scale ({m.value / m.geom_length / med:.0%} of median) - ignored")
         if len(rejected) > 8:
@@ -395,18 +412,28 @@ def _fit_axes(cal: Calibration, dims: list[DimEntity], extent_raw: float, raster
         order = sorted(solved)
         raws = [float(centers[n]) for n in order]
         vals = [solved[n] for n in order]
-        if any(v2 <= v1 for v1, v2 in zip(vals, vals[1:])):
+        if raster:
+            # bitmap measurements are only pixel-accurate: a piecewise map would amplify the
+            # ±1 px noise, so fit one scale per axis (long dimensions weigh most)
+            lens = np.array([abs(centers[j] - centers[i]) for i, j, _, _ in edges])
+            vs = np.array([v for _, _, v, _ in edges])
+            amap.slope = float((vs * lens).sum() / (lens * lens).sum())
+            resid = np.abs(vs - amap.slope * lens) * cal.k
+            log.info(f"{axis.upper()}-axis: {len(edges)} dimension(s), scale {amap.slope * cal.k:.4g} mm/px, "
+                     f"largest residual {resid.max():.0f} mm")
+        elif any(v2 <= v1 for v1, v2 in zip(vals, vals[1:])):
             log.warn(f"{axis}-dimensions are contradictory (non-monotone) - using uniform scale on this axis")
             continue
-        amap.raws = np.array(raws)
-        amap.vals = np.array(vals)
-        worst_local = 0.0
-        for (u1, v1), (u2, v2) in zip(zip(raws, vals), zip(raws[1:], vals[1:])):
-            worst_local = max(worst_local, abs((v2 - v1) - r * (u2 - u1)) * cal.k)
-        log.info(f"{axis.upper()}-axis: {len(ad)} dimension(s), {len(raws)} reference lines; "
-                 f"largest correction between neighbouring lines {worst_local:.1f} mm")
-        cal.info[f"{axis}_ticks"] = len(raws)
-        cal.info[f"{axis}_max_correction_mm"] = round(worst_local, 2)
+        else:
+            amap.raws = np.array(raws)
+            amap.vals = np.array(vals)
+            worst_local = 0.0
+            for (u1, v1), (u2, v2) in zip(zip(raws, vals), zip(raws[1:], vals[1:])):
+                worst_local = max(worst_local, abs((v2 - v1) - r * (u2 - u1)) * cal.k)
+            log.info(f"{axis.upper()}-axis: {len(ad)} dimension(s), {len(raws)} reference lines; "
+                     f"largest correction between neighbouring lines {worst_local:.1f} mm")
+            cal.info[f"{axis}_ticks"] = len(raws)
+            cal.info[f"{axis}_max_correction_mm"] = round(worst_local, 2)
         # --- processed dims & derived (missing) chain members
         direct = {(i, j) for i, j, _, _ in edges}
         lines: dict[tuple[int, int], set[int]] = {}
@@ -454,7 +481,7 @@ def stated_dims_mm(cal: Calibration, d: Drawing, fx=None, fy=None) -> list[dict[
     fx, fy = fx or cal.fx, fy or cal.fy
     out = []
     for m in d.dims:
-        if not m.value:
+        if not m.value or m.source.endswith(":rejected"):
             continue
         p1 = (fx(m.p1[0]), fy(m.p1[1]))
         p2 = (fx(m.p2[0]), fy(m.p2[1]))

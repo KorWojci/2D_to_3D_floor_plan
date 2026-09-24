@@ -2,15 +2,21 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import numpy as np
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, Polygon, box
+from shapely.ops import unary_union
 
 from ..model import Arc, Drawing, Label, Opening, Settings
 from . import keywords as kw
 from .walls import ANG_TOL, GapCandidate, Line, Rect, WallLine, _endpoints, merge_collinear
+
+
+OUTDOOR = re.compile(r"taras|balkon|balcon|balcony|terrace|terrass|loggia|patio|veranda|weranda|ogr[oó]d|garden|"
+                     r"garten|jardin|jard[ií]n|giardino|deck|porch", re.I)
 
 
 @dataclass
@@ -23,6 +29,8 @@ class OpeningContext:
     cue: Any
     wall_lines: list[WallLine]
     stats: dict[str, int] = field(default_factory=dict)
+    outdoor_labels: list[tuple[str, float, float]] = field(default_factory=list)
+    footprint: Any = None  # filled outline of the building (for interior / exterior tests)
 
     @classmethod
     def build(cls, d: Drawing, s: Settings, merged_walls, lines: list[WallLine], tol: float) -> "OpeningContext":
@@ -32,7 +40,19 @@ class OpeningContext:
         allm = merge_collinear(other, tol)
         arr = np.array(allm, dtype=float) if allm else np.zeros((0, 4))
         E1, E2 = _endpoints(arr) if len(arr) else (np.zeros((0, 2)), np.zeros((0, 2)))
-        return cls(arcs, labels, arr, E1, E2, d.cue_provider, lines)
+        outdoor = [(t.text, t.x, t.y) for t in d.texts if OUTDOOR.search(t.text)]
+        return cls(arcs, labels, arr, E1, E2, d.cue_provider, lines, outdoor_labels=outdoor,
+                   footprint=_footprint(lines, s))
+
+
+def _footprint(lines: list[WallLine], s: Settings):
+    """Building outline with rooms filled: wall pieces, gaps closed, holes filled."""
+    polys = [p.polygon(wl.frame) for wl in lines for p in wl.pieces]
+    if not polys:
+        return None
+    r = s.max_opening * 0.55
+    closed = unary_union(polys).buffer(r, join_style=2).buffer(-r, join_style=2)
+    return unary_union([Polygon(g.exterior) for g in getattr(closed, "geoms", [closed]) if not g.is_empty])
 
 
 def _swing_default(fr: Line, s1: float, s2: float, v2: float) -> dict[str, Any]:
@@ -100,19 +120,56 @@ def classify_gap(g: GapCandidate, ctx: OpeningContext, s: Settings, require_evid
     # 4. bitmap ink
     cue = ctx.cue
     if typ is None and cue is not None and hasattr(cue, "door_swing"):
-        sc = 0.0
+        sc, leaf, swing_found = 0.0, w, None
+        need = 0.8 if g.source == "end" else 0.6
         for sv, other in ((g.s1, g.s2), (g.s2, g.s1)):
-            for vv in (g.v1, g.v2):
-                hinge = fr.world(sv, vv)
-                closed = fr.u * (1 if other > sv else -1)
-                sc = max(sc, cue.door_swing(hinge, w, closed, fr.n), cue.door_swing(hinge, w / 2, closed, fr.n))
+            into = 1 if other > sv else -1
+            for vv, inset in [(vv, i) for vv in (g.v1, g.v2, vm) for i in (0.0, 0.04 * w)]:
+                hinge = fr.world(sv + into * inset, vv)  # hinge may sit a little inside the jamb
+                closed = fr.u * into
+                # the leaf may be narrower than the opening (door + fixed side panel) or half of
+                # it (double door)
+                for f in (1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4, 0.35):
+                    v, side = cue.door_swing(hinge, f * w, closed, fr.n)
+                    if v > sc + 0.05 or (v >= sc and f > leaf / w):
+                        sc, leaf = v, f * w
+                        a_closed = math.degrees(math.atan2(closed[1], closed[0])) % 360
+                        a_open = math.degrees(math.atan2(fr.n[1] * side, fr.n[0] * side)) % 360
+                        ccw = (a_open - a_closed) % 360 < 180
+                        swing_found = {"hinge": hinge, "r": f * w, "a0": a_closed if ccw else a_open,
+                                       "a1": a_open if ccw else a_closed, "assumed": False}
         gl = cue.glazing(p1, p2, fr.n, depth)
-        if sc >= 0.6 and sc >= gl:
+        if leaf < 0.85 * w and gl >= 0.6:
+            need = max(need, 0.85)  # door + side panel next to glazing: demand a clear symbol
+        if sc >= need and (sc >= gl or leaf < 0.95 * w):
             typ = "door"
-            evidence.append(f"door swing in image ({sc:.0%})")
+            swing = swing_found
+            evidence.append(f"door swing in image ({sc:.0%})" + (f", leaf {leaf:.0f} mm + side panel" if leaf < 0.85 * w and sc < gl + 0.5 else ""))
         elif gl >= 0.6:
             typ = "window"
             evidence.append(f"glazing in image ({gl:.0%})")
+
+    # 4a. windows only exist in exterior walls: an interior opening with lines in it is a door
+    #     (leaf drawn in the opening) unless a window block/layer says otherwise
+    if typ == "window" and ctx.footprint is not None and "window block/layer" not in evidence:
+        off = depth / 2 + 400
+        outside = any(not ctx.footprint.contains(Point(p1[0] + fr.n[0] * sgn * off + (p2[0] - p1[0]) / 2,
+                                                      p1[1] + fr.n[1] * sgn * off + (p2[1] - p1[1]) / 2))
+                      for sgn in (1, -1))
+        if not outside:
+            typ = "door"
+            evidence.append("interior wall - not a window")
+
+    # 4b. room names next to the opening: an opening onto a terrace / balcony is a door
+    if typ == "window" and ctx.outdoor_labels:
+        cx, cy = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
+        for name, lx, ly in ctx.outdoor_labels:
+            dn = abs((lx - cx) * fr.n[0] + (ly - cy) * fr.n[1])
+            da = abs((lx - cx) * fr.u[0] + (ly - cy) * fr.u[1])
+            if dn <= 3000 and da <= max(w / 2, 1500):
+                typ = "door"
+                evidence.append(f"leads to '{name}' (terrace/balcony door)")
+                break
 
     sill, head = None, None
     # 5. 3D model
@@ -138,8 +195,8 @@ def classify_gap(g: GapCandidate, ctx: OpeningContext, s: Settings, require_evid
     if typ is None:
         if require_evidence:
             return None
-        typ = "door" if w <= 1300 else "passage"
-        evidence.append("gap in wall (no symbol found)")
+        typ = "passage"  # a recess to door height without a door leaf
+        evidence.append("gap in wall (no door symbol found)")
     if typ == "door" and swing is None:
         swing = _swing_default(fr, g.s1, g.s2, g.v2)
     if sill is None:
@@ -186,7 +243,7 @@ def find_end_openings(lines: list[WallLine], ctx: OpeningContext, s: Settings, t
             if any(t.intersection(region).area > 0.3 * region.area for t in taken):
                 continue
             op = classify_gap(cand, ctx, s, require_evidence=True)
-            if op and "gap in wall" not in op.evidence[0]:
+            if op and not op.evidence[0].startswith("gap in wall"):
                 out.append(op)
                 taken.append(region.buffer(tol))
     return out

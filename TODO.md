@@ -89,11 +89,20 @@ Each step says **what** has to be done and **how**. Code references are relative
 - [x] **Dimension report.** How: `analysis/dimreport.py`. Each wall length and
   thickness and each opening width is labelled `stated`, `derived` or `computed`, along
   with the deviation between stated and final values.
-- [ ] **OCR for dimensions on scans/photos.** How: optional `pytesseract` or
-  `easyocr`. Take the digit boxes from the residual ink and feed them to
-  `extract_text_dimensions` as `Text` objects. Everything downstream already works.
-  This is the biggest remaining gap for bitmaps: today they need a paper scale or a
-  known size.
+- [x] **OCR for dimensions on bitmaps.** How: `importers/raster_dims.py`.
+  - RapidOCR (pip, ONNX, reads rotated text) is used, with Tesseract as a fallback.
+  - For each number, the dimension line is searched through or next to the text.
+  - The line's extent ends at tick marks, at an arrow tip touching a wall face, or at the
+    line end. Crossings by furniture lines are not ticks, and gaps under furniture fills
+    are bridged.
+  - Room-area labels (a number directly under a room name) are skipped.
+  - The scale is a consensus (the largest agreeing cluster) and one scale per axis is
+    fitted for bitmaps. Mis-measured dimensions are listed in the log.
+- [~] **Interior arrow dimensions on bitmaps** are sometimes mis-measured: a line broken by
+  more than about 2.5 text heights of furniture, or an arrow merged into the wall. Today
+  they are rejected as outliers; the exterior chain dimensions carry the scale. How:
+  follow the line past longer interruptions when it continues at the same row and the
+  ink between is a filled area.
 - [ ] **Angular / diagonal dimension chains.** How: extend the per-axis solver to any
   direction that has ≥2 parallel dimensions (group by angle instead of only x/y).
 - [ ] **Room-area texts as a consistency check.** How: compare "12.5 m²" labels with
@@ -130,9 +139,19 @@ Each step says **what** has to be done and **how**. Code references are relative
 - [~] **Curved walls.** How: arcs on wall layers (r ≥ 1.5 m) are split into chords on a
   common 3° grid so the inner and outer faces pair up. Tested only on 3D sections, not
   on real curved CAD walls.
-- [ ] **Sliding doors vs windows.** How: a sliding door has two overlapping leaves
-  offset inside the gap and reaches the floor. Add a symbol template for it. Today it
-  may be read as a window when there's no arc.
+- [~] **Sliding doors vs windows.** Done so far:
+  - An exterior "window" next to a room name such as taras / balkon / terrace / loggia /
+    patio (OCR text or drawing text) becomes a door.
+  - Wide doors without a drawn swing are drawn with a sliding symbol.
+
+  Still to do: recognise the sliding-door symbol itself (two overlapping leaves offset in
+  the gap).
+- [x] **Door + fixed side panel** (balcony doors). How: leaf radii of 0.35 to 1.0 × the
+  opening width are searched. The hinge may sit on either face or the centre line,
+  slightly inside the jamb. Both the arc and the open leaf line must be drawn.
+- [~] **Bitmap door swings that are only partly drawn** (for example the boiler-room door
+  in `samples/real/house_plan.webp`) are read as a passage. How: accept an arc alone when
+  it is long (≥ 70 %) and ends at the jamb.
 - [ ] **Arched / non-rectangular openings, niches that don't go through the wall,
   columns.** How: store an opening profile (polygon in the wall plane) and build it
   with `manifold` booleans instead of the band extrusion.
@@ -152,8 +171,12 @@ Each step says **what** has to be done and **how**. Code references are relative
   the sill and a lintel above the head.
 - [x] **Floor** as a surface, or as a slab with a given thickness. It's left out of
   STL/3MF when it's a zero-thickness surface.
-- [ ] **Ceiling / slab on top, per-room floors with room names.** How: polygonise the
-  room holes of the wall union and extrude or label each one.
+- [x] **Floor and ceiling placeholders.** Separate `floor` / `ceiling` objects (surface or
+  slab, switchable in the settings, and shown or hidden in the 3D preview). They are
+  IfcSlab in IFC. When a 3D model is imported, floor and ceiling slabs are detected and
+  ignored, so sill and head heights are measured from the real floor.
+- [ ] **Per-room floors and ceilings with room names** (from OCR or text). How: polygonise
+  the room holes of the wall union and label each one with the text inside it.
 - [ ] **Door leaves and window frames/glass** (optional furniture-level detail). How:
   parametric meshes placed from `Opening.swing` and the depth.
 - [ ] **Per-room / sloped ceilings (attics).**
@@ -211,9 +234,23 @@ Each step says **what** has to be done and **how**. Code references are relative
   - Round-trips of the exports, and the HTTP API.
 - [~] **Dockerfile** (builds LibreDWG). Written but not yet built: there was no Docker daemon in the
   development sandbox. Its LibreDWG and pip steps are the ones that were run and tested natively.
-- [ ] **A corpus of real-world plans** (from architects, estate-agent PDFs and scans)
-  with hand-checked results. This is the most valuable next step for tuning the
-  heuristics.
+- [~] **A corpus of real-world plans** with hand-checked results. The first one is
+  `samples/real/house_plan.webp`, an estate-agent bitmap.
+
+  **Fixed for it:**
+  - Rectilinear snapping of traced outlines. Slanted short faces had lost most piers.
+  - A solid-black wall class, so thin partitions survive.
+  - Bold text removed from the wall mask.
+  - Solid junction blocks and columns kept as walls.
+  - Gaps split at columns.
+  - Windows only in exterior walls.
+  - Openings up to 5 m.
+  - Pixel seams welded.
+  - SVG/PDF/PNG exports use presentation attributes: CSS was ignored by the renderers,
+    which filled the door arcs black.
+
+  **Next:** more plans (PDF exports from CAD, photos of paper plans), with an automated
+  regression test per plan.
 - [ ] **CI workflow** (GitHub Actions: `pip install -r requirements-dev.txt && pytest`).
 - [ ] **Performance on large drawings.** Wall pairing is O(n²) within a direction
   family and is fine up to about 10k segments. Use an STRtree / sweep line for bigger

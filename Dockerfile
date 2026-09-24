@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 # ---- application
 FROM python:3.11-slim
+# libGL / glib: needed by opencv-python, which the OCR package (rapidocr) pulls in
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 COPY --from=libredwg /opt/libredwg /opt/libredwg
 ENV PATH="/opt/libredwg/bin:${PATH}" LD_LIBRARY_PATH="/opt/libredwg/lib"
 WORKDIR /app

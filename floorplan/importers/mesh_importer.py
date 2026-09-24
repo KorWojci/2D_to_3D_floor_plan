@@ -109,9 +109,10 @@ class MeshCues:
             if not zs or z - zs[-1] > 1e-6 * max(1.0, abs(z)):
                 zs.append(z)
         zs = [(z - self.z0) * self.scale for z in zs]
+        top = (self.zmax - self.z0) * self.scale
+        zs = [z for z in zs if -1.0 <= z <= top + 1.0]  # ignore floor / ceiling slabs
         if len(zs) % 2 == 1 and zs[0] < 1.0:
             zs = zs[1:]  # a zero-thickness floor surface, not the bottom of a solid
-        top = (self.zmax - self.z0) * self.scale
         # pair up hits: [enter, exit], [enter, exit] ... -> free gaps between them
         free = []
         prev = 0.0
@@ -144,6 +145,37 @@ class MeshCues:
         return min(1.0, tot / max(2 * width, 1e-9))
 
 
+def storey_levels(mesh: trimesh.Trimesh) -> tuple[float, float]:
+    """Floor and ceiling level of the storey.  The largest horizontal surface near the bottom
+    is the floor (top of a floor slab), the largest near the top the ceiling / wall tops, so
+    slabs in the model do not shift the measured sill and head heights."""
+    lo, hi = float(mesh.bounds[0][2]), float(mesh.bounds[1][2])
+    rng = hi - lo
+    if rng <= 0:
+        return lo, hi
+    n = mesh.face_normals
+    horiz = np.abs(n[:, 2]) > 0.99
+    if not horiz.any():
+        return lo, hi
+    z = mesh.triangles_center[horiz, 2]
+    a = mesh.area_faces[horiz]
+    q = np.round(z / (rng * 1e-4)) * (rng * 1e-4)  # merge coplanar faces
+
+    def pick(mask, prefer_high):
+        if not mask.any():
+            return None
+        levels = {}
+        for zz, aa in zip(q[mask], a[mask]):
+            levels[zz] = levels.get(zz, 0.0) + aa
+        best = max(levels.values())
+        cands = [zz for zz, aa in levels.items() if aa >= 0.9 * best]
+        return max(cands) if prefer_high else min(cands)
+
+    floor = pick(q <= lo + 0.25 * rng, prefer_high=True)
+    ceil_ = pick(q >= lo + 0.6 * rng, prefer_high=False)
+    return (floor if floor is not None else lo), (ceil_ if ceil_ is not None else hi)
+
+
 def import_mesh(path: Path, settings: Settings, log: Log) -> Drawing:
     mesh = _load_mesh(path, log)
     log.info(f"3D model: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
@@ -167,7 +199,9 @@ def import_mesh(path: Path, settings: Settings, log: Log) -> Drawing:
             best = min(UNIT_CANDIDATES, key=lambda u: abs(math.log(max(ext[2] * u[1], 1e-9) / 2800.0)))
             unit_mm = best[1]
             log.info(f"Model units guessed as {best[0]} (height {ext[2]:g} units ≈ {ext[2] * unit_mm / 1000:.2f} m)")
-    zmin, zmax = float(mesh.bounds[0][2]), float(mesh.bounds[1][2])
+    zmin, zmax = storey_levels(mesh)
+    if zmin > mesh.bounds[0][2] + 1e-9 or zmax < mesh.bounds[1][2] - 1e-9:
+        log.info(f"Floor / ceiling slabs detected - storey from {zmin * unit_mm:.0f} to {zmax * unit_mm:.0f} mm")
     h_cut = zmin + min(settings.slice_height / unit_mm, (zmax - zmin) * 0.6)
     h_low = zmin + min(300.0 / unit_mm, (zmax - zmin) * 0.12)
 

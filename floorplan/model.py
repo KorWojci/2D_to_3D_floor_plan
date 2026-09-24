@@ -216,12 +216,14 @@ class Settings:
     door_height: float = 2100.0
     window_sill: float = 900.0
     window_head: float = 2100.0
-    floor: bool = True
-    floor_thickness: float = 0.0  # 0 -> flat floor surface only
+    floor: bool = True  # floor placeholder under the whole flat
+    floor_thickness: float = 0.0  # 0 -> flat surface at 0; >0 -> slab from -t to 0
+    ceiling: bool = True  # ceiling placeholder at wall height
+    ceiling_thickness: float = 0.0  # 0 -> flat surface at wall height; >0 -> slab above it
     min_wall_thickness: float = 60.0
     max_wall_thickness: float = 550.0
     min_opening: float = 350.0
-    max_opening: float = 3500.0
+    max_opening: float = 5000.0
     units: str = "auto"  # auto|mm|cm|m|in|ft
     paper_scale: Optional[float] = None  # N of 1:N for PDF/SVG/raster
     dpi: Optional[float] = None  # raster resolution (for paper_scale)

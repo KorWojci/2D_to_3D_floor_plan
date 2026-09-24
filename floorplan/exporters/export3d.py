@@ -219,6 +219,30 @@ def export_ifc(scene, plan, path: Path, log: Log) -> Path | None:
             ifcopenshell.api.spatial.assign_container(f, relating_structure=storey, products=[el])
             if o.id in host:
                 ifcopenshell.api.feature.add_filling(f, opening=op, element=el)
+    # floor / ceiling placeholders as IfcSlab (IFC needs a real thickness: 200 mm when the
+    # placeholder is only a surface, placed below the floor / above the ceiling)
+    from ..builder3d import building_footprint
+
+    st = plan.settings
+    fp = building_footprint(plan)
+    rings = [g for g in getattr(fp, "geoms", [fp]) if not g.is_empty]
+    n_slabs = 0
+    for enabled, name, ptype, t, z in ((st.floor, "Floor", "FLOOR", st.floor_thickness or 200.0, -(st.floor_thickness or 200.0)),
+                                       (st.ceiling, "Ceiling", "ROOF", st.ceiling_thickness or 200.0, H)):
+        if not enabled:
+            continue
+        for g in rings:
+            slab = ifcopenshell.api.root.create_entity(f, ifc_class="IfcSlab", name=name, predefined_type=ptype)
+            placement(slab, (0.0, 0.0), (1.0, 0.0), z)
+            ring = [(round(x, 1), round(y, 1)) for x, y in g.simplify(1.0).exterior.coords]  # mm, closed
+            curve = f.createIfcPolyline([f.createIfcCartesianPoint(pt) for pt in ring])
+            profile = f.createIfcArbitraryClosedProfileDef("AREA", None, curve)
+            solid = f.createIfcExtrudedAreaSolid(profile, f.createIfcAxis2Placement3D(f.createIfcCartesianPoint((0.0, 0.0, 0.0))),
+                                                 f.createIfcDirection((0.0, 0.0, 1.0)), float(t))
+            rep = f.createIfcShapeRepresentation(body, "Body", "SweptSolid", [solid])
+            ifcopenshell.api.geometry.assign_representation(f, product=slab, representation=rep)
+            ifcopenshell.api.spatial.assign_container(f, relating_structure=storey, products=[slab])
+            n_slabs += 1
     f.write(str(path))
-    log.info(f"IFC4 written ({len(runs)} IfcWall, {len(plan.openings)} IfcOpeningElement with doors/windows)")
+    log.info(f"IFC4 written ({n_slabs} IfcSlab placeholder(s), {len(runs)} IfcWall, {len(plan.openings)} IfcOpeningElement with doors/windows)")
     return path

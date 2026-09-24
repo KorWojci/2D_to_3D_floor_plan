@@ -8,7 +8,6 @@ from typing import Iterable
 
 import ezdxf
 from shapely.geometry import MultiPolygon, Polygon
-from shapely.ops import unary_union
 
 from .. import dwg
 from ..log import Log
@@ -21,7 +20,9 @@ DIM_LAYERS = {"stated": "DIMENSIONS", "derived": "DIMENSIONS_DERIVED", "computed
 
 
 def _wall_union(plan: Plan):
-    return unary_union([Polygon(w.polygon).buffer(0) for w in plan.walls]) if plan.walls else Polygon()
+    from ..builder3d import wall_geometry
+
+    return wall_geometry(plan)
 
 
 def _polys(g) -> list[Polygon]:
@@ -59,6 +60,21 @@ def door_symbol(o: Opening) -> tuple[tuple, tuple, float, float, float]:
     la = a0 if perp(a0) < perp(a1) else a1
     leaf = (h[0] + r * math.cos(math.radians(la)), h[1] + r * math.sin(math.radians(la)))
     return h, leaf, r, a0, a1
+
+
+def sliding_leaves(o: Opening) -> list[tuple[tuple, tuple]] | None:
+    """Wide doors without a drawn swing (terrace / patio doors) are drawn as sliding doors:
+    two overlapping leaves offset across the wall."""
+    if o.type != "door" or o.width < 1500 or (o.swing and not o.swing.get("assumed", True)):
+        return None
+    ux, uy = _unit(o.p1, o.p2)
+    nx, ny = -uy, ux
+    out = []
+    for f0, f1, off in ((0.0, 0.55, -0.12), (0.45, 1.0, 0.12)):
+        a = (o.p1[0] + ux * o.width * f0 + nx * off * o.depth, o.p1[1] + uy * o.width * f0 + ny * off * o.depth)
+        b = (o.p1[0] + ux * o.width * f1 + nx * off * o.depth, o.p1[1] + uy * o.width * f1 + ny * off * o.depth)
+        out.append((a, b))
+    return out
 
 
 def _dim_geometry(d: Dimension):
@@ -134,6 +150,9 @@ def export_dxf(plan: Plan, path: Path, log: Log, version: str = "R2018") -> Path
                 off = f * o.depth
                 msp.add_line((o.p1[0] + nx * off, o.p1[1] + ny * off), (o.p2[0] + nx * off, o.p2[1] + ny * off),
                              dxfattribs={"layer": "WINDOWS"})
+        elif o.type == "door" and sliding_leaves(o):
+            for a, b in sliding_leaves(o):
+                msp.add_line(a, b, dxfattribs={"layer": "DOORS"})
         elif o.type == "door":
             h, leaf, r, a0, a1 = door_symbol(o)
             msp.add_line(h, leaf, dxfattribs={"layer": "DOORS"})
@@ -200,6 +219,18 @@ def export_dwg(plan: Plan, path: Path, log: Log) -> Path | None:
 # ------------------------------------------------------------------ SVG / PDF / PNG
 
 
+# Presentation attributes are written on every element (not only CSS classes): PDF/PNG
+# conversion (PyMuPDF), CAD importers and many viewers ignore <style> blocks.
+SVG_STYLE = {
+    "wall": 'fill="#2b2b2b" stroke="#000000" stroke-width="6"',
+    "op": 'fill="#ffffff" stroke="#666666" stroke-width="5"',
+    "win": 'fill="none" stroke="#2a7fd4" stroke-width="12"',
+    "door": 'fill="none" stroke="#c0392b" stroke-width="10"',
+    "lbl": 'fill="#555555" font-size="90" text-anchor="middle"',
+}
+DIM_COLOR = {"stated": "#333333", "derived": "#1e8449", "computed": "#2471a3"}
+
+
 def plan_to_svg(plan: Plan, dims: Iterable[str] = ("stated", "derived", "computed"), paper_scale: float = 50.0,
                 title: str = "") -> str:
     x0, y0, x1, y1 = plan.bbox()
@@ -218,68 +249,72 @@ def plan_to_svg(plan: Plan, dims: Iterable[str] = ("stated", "derived", "compute
     def pts(seq):
         return " ".join(f"{X(a):.1f},{Y(b):.1f}" for a, b in seq)
 
+    def line(a, b, attrs):
+        return f'<line x1="{X(a[0]):.1f}" y1="{Y(a[1]):.1f}" x2="{X(b[0]):.1f}" y2="{Y(b[1]):.1f}" {attrs}/>'
+
     out = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{W / paper_scale:.1f}mm" height="{H / paper_scale:.1f}mm" '
         f'viewBox="0 0 {W:.1f} {H:.1f}" font-family="Helvetica, Arial, sans-serif">',
-        "<style>.wall{fill:#2b2b2b;stroke:#000;stroke-width:6}.op{fill:#fff;stroke:#666;stroke-width:5}"
-        ".win{stroke:#2a7fd4;stroke-width:12;fill:none}.door{stroke:#c0392b;stroke-width:10;fill:none}"
-        ".dim line{stroke-width:6}.dim text{font-size:110px;text-anchor:middle}"
-        ".stated line{stroke:#333}.stated text{fill:#111}.derived line{stroke:#1e8449}.derived text{fill:#1e8449}"
-        ".computed line{stroke:#2471a3;stroke-dasharray:30 20}.computed text{fill:#2471a3}"
-        ".lbl{font-size:90px;fill:#555;text-anchor:middle}</style>",
-        f'<rect x="0" y="0" width="{W:.1f}" height="{H:.1f}" fill="#fff"/>',
+        f'<rect x="0" y="0" width="{W:.1f}" height="{H:.1f}" fill="#ffffff"/>',
     ]
     if title:
-        out.append(f'<text x="{m / 3:.0f}" y="{m / 2:.0f}" font-size="200">{html.escape(title)}</text>')
+        out.append(f'<text x="{m / 3:.0f}" y="{m / 2:.0f}" font-size="200" fill="#000000">{html.escape(title)}</text>')
     walls = _wall_union(plan)
     out.append('<g id="walls">')
     for p in _polys(walls):
         d = "M" + pts(p.exterior.coords) + "Z" + "".join("M" + pts(r.coords) + "Z" for r in p.interiors)
-        out.append(f'<path class="wall" fill-rule="evenodd" d="{d}"/>')
-    out.append("</g><g id=\"openings\">")
+        out.append(f'<path class="wall" {SVG_STYLE["wall"]} fill-rule="evenodd" d="{d}"/>')
+    out.append('</g><g id="openings">')
     for o in plan.openings:
-        out.append(f'<polygon class="op" points="{pts(o.polygon)}"/>')
+        out.append(f'<polygon class="op" {SVG_STYLE["op"]} points="{pts(o.polygon)}"/>')
         ux, uy = _unit(o.p1, o.p2)
         nx, ny = -uy, ux
         if o.type == "window":
             for f in (-0.08, 0.08):
                 a = (o.p1[0] + nx * f * o.depth, o.p1[1] + ny * f * o.depth)
                 b = (o.p2[0] + nx * f * o.depth, o.p2[1] + ny * f * o.depth)
-                out.append(f'<line class="win" x1="{X(a[0]):.1f}" y1="{Y(a[1]):.1f}" x2="{X(b[0]):.1f}" y2="{Y(b[1]):.1f}"/>')
+                out.append(line(a, b, f'class="win" {SVG_STYLE["win"]}'))
+        elif o.type == "door" and sliding_leaves(o):
+            for a, b in sliding_leaves(o):
+                out.append(line(a, b, f'class="door" {SVG_STYLE["door"]}'))
         elif o.type == "door":
             h, leaf, r, a0, a1 = door_symbol(o)
-            s = (h[0] + r * math.cos(math.radians(a0)), h[1] + r * math.sin(math.radians(a0)))
-            e = (h[0] + r * math.cos(math.radians(a1)), h[1] + r * math.sin(math.radians(a1)))
+            st = (h[0] + r * math.cos(math.radians(a0)), h[1] + r * math.sin(math.radians(a0)))
+            en = (h[0] + r * math.cos(math.radians(a1)), h[1] + r * math.sin(math.radians(a1)))
             large = 1 if ((a1 - a0) % 360) > 180 else 0
-            out.append(f'<line class="door" x1="{X(h[0]):.1f}" y1="{Y(h[1]):.1f}" x2="{X(leaf[0]):.1f}" y2="{Y(leaf[1]):.1f}"/>')
-            # SVG y axis is flipped -> CCW arc becomes sweep-flag 0
-            out.append(f'<path class="door" d="M{X(s[0]):.1f},{Y(s[1]):.1f} A{r:.1f},{r:.1f} 0 {large} 0 {X(e[0]):.1f},{Y(e[1]):.1f}"/>')
+            out.append(line(h, leaf, f'class="door" {SVG_STYLE["door"]}'))
+            # SVG y axis is flipped -> a CCW arc becomes sweep-flag 0
+            out.append(f'<path class="door" {SVG_STYLE["door"]} d="M{X(st[0]):.1f},{Y(st[1]):.1f} '
+                       f'A{r:.1f},{r:.1f} 0 {large} 0 {X(en[0]):.1f},{Y(en[1]):.1f}"/>')
         c = ((o.p1[0] + o.p2[0]) / 2 - nx * (o.depth / 2 + 150), (o.p1[1] + o.p2[1]) / 2 - ny * (o.depth / 2 + 150))
         ang = math.degrees(math.atan2(uy, ux))
         if ang > 90.0001 or ang <= -90:
             ang += 180
-        out.append(f'<text class="lbl" x="{X(c[0]):.1f}" y="{Y(c[1]):.1f}" '
+        out.append(f'<text class="lbl" {SVG_STYLE["lbl"]} x="{X(c[0]):.1f}" y="{Y(c[1]):.1f}" '
                    f'transform="rotate({-ang:.2f} {X(c[0]):.1f} {Y(c[1]):.1f})">{html.escape(o.id)}</text>')
     out.append("</g>")
     for src in ("stated", "derived", "computed"):
         if src not in dims:
             continue
+        col = DIM_COLOR[src]
+        dash = ' stroke-dasharray="30 20"' if src == "computed" else ""
+        la = f'stroke="{col}" stroke-width="6"{dash}'
         out.append(f'<g class="dim {src}" id="dims-{src}">')
         for d in _dims_for_drawing(plan, (src,)):
             a, b, ang, (nx, ny) = _dim_geometry(d)
-            out.append(f'<line x1="{X(a[0]):.1f}" y1="{Y(a[1]):.1f}" x2="{X(b[0]):.1f}" y2="{Y(b[1]):.1f}"/>')
+            out.append(line(a, b, la))
+            ux, uy = _unit(d.p1, d.p2)
             for p, q in ((d.p1, a), (d.p2, b)):
                 if d.offset:
-                    out.append(f'<line x1="{X(p[0]):.1f}" y1="{Y(p[1]):.1f}" x2="{X(q[0]):.1f}" y2="{Y(q[1]):.1f}" stroke-width="3"/>')
+                    out.append(line(p, q, f'stroke="{col}" stroke-width="3"'))
                 t = 45
-                ux, uy = _unit(d.p1, d.p2)
-                out.append(f'<line x1="{X(q[0] - (ux + nx) * t):.1f}" y1="{Y(q[1] - (uy + ny) * t):.1f}" '
-                           f'x2="{X(q[0] + (ux + nx) * t):.1f}" y2="{Y(q[1] + (uy + ny) * t):.1f}"/>')
+                out.append(line((q[0] - (ux + nx) * t, q[1] - (uy + ny) * t), (q[0] + (ux + nx) * t, q[1] + (uy + ny) * t),
+                                f'stroke="{col}" stroke-width="6"'))
             c = ((a[0] + b[0]) / 2 + nx * 50, (a[1] + b[1]) / 2 + ny * 50)
             if d.offset < 0:
                 c = ((a[0] + b[0]) / 2 - nx * 170, (a[1] + b[1]) / 2 - ny * 170)
-            out.append(f'<text x="{X(c[0]):.1f}" y="{Y(c[1]):.1f}" transform="rotate({-ang:.2f} {X(c[0]):.1f} {Y(c[1]):.1f})">'
-                       f"{_fmt(d.value)}</text>")
+            out.append(f'<text x="{X(c[0]):.1f}" y="{Y(c[1]):.1f}" fill="{col}" font-size="110" text-anchor="middle" '
+                       f'transform="rotate({-ang:.2f} {X(c[0]):.1f} {Y(c[1]):.1f})">{_fmt(d.value)}</text>')
         out.append("</g>")
     out.append("</svg>")
     return "\n".join(out)

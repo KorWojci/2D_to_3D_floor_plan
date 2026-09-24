@@ -307,8 +307,12 @@ def _merge_intervals(iv: list[tuple[float, float]], tol: float) -> list[list[flo
     return out
 
 
-def classify_rects(wl: WallLine, tol: float) -> None:
-    """Split rects of a wall line into thick walls and thin glazing fillers; build pieces."""
+def classify_rects(wl: WallLine, tol: float, allow_fillers: bool = True) -> None:
+    """Split rects of a wall line into thick walls and thin glazing fillers; build pieces.
+
+    A filler (window glazing drawn as parallel lines) runs exactly from one wall piece's end
+    to the next piece's start.  Traced bitmaps contain no glazing (thin lines are removed
+    before tracing), so there every rect is a wall (``allow_fillers=False``)."""
     tmax = max(r.t for r in wl.rects)
     thick = [r for r in wl.rects if r.t >= 0.7 * tmax - tol]
     spans = _merge_intervals([(r.s1, r.s2) for r in thick], tol)
@@ -321,7 +325,8 @@ def classify_rects(wl: WallLine, tol: float) -> None:
         inside_thick = any(r.s1 >= a - tol and r.s2 <= b + tol for a, b in spans)
         if inside_thick:
             continue  # layer line inside a wall
-        if r.s1 >= lo - tol and r.s2 <= hi + tol:
+        jamb_to_jamb = any(abs(b - r.s1) <= 2 * tol for _, b in spans) and any(abs(a - r.s2) <= 2 * tol for a, _ in spans)
+        if allow_fillers and jamb_to_jamb and r.s1 >= lo - tol and r.s2 <= hi + tol:
             r.kind = "filler"
             wl.fillers.append(r)
         else:
@@ -346,12 +351,14 @@ def classify_rects(wl: WallLine, tol: float) -> None:
     wl.pieces = kept
 
 
-def _merge_pieces(wl: WallLine, tol: float) -> None:
+def _merge_pieces(wl: WallLine, tol: float, gap: float = 0.0) -> None:
+    """Merge pieces with the same band that overlap or are separated by less than ``gap``."""
     ps = sorted(wl.pieces, key=lambda p: p.s1)
     out: list[Rect] = []
+    reach = max(tol, gap)
     for p in ps:
         for q in out:
-            if abs(p.v1 - q.v1) <= tol and abs(p.v2 - q.v2) <= tol and p.s1 <= q.s2 + tol and p.s2 >= q.s1 - tol:
+            if abs(p.v1 - q.v1) <= tol and abs(p.v2 - q.v2) <= tol and p.s1 <= q.s2 + reach and p.s2 >= q.s1 - reach:
                 q.s1, q.s2 = min(p.s1, q.s1), max(p.s2, q.s2)
                 q.extended = [q.extended[0] or p.extended[0], q.extended[1] or p.extended[1]]
                 break
@@ -443,7 +450,12 @@ class GapCandidate:
     host: Optional[Rect] = None
 
 
-def find_gaps(lines: list[WallLine], s: Settings, tol: float) -> list[GapCandidate]:
+def find_gaps(lines: list[WallLine], s: Settings, tol: float, obstacles: Optional[list] = None) -> list[GapCandidate]:
+    """Gaps between consecutive pieces of a wall line.  A gap crossed by another wall (a column
+    or a perpendicular wall standing in the line) is split there: each part is its own opening."""
+    items = [(wl, p, p.polygon(wl.frame)) for wl in lines for p in wl.pieces]
+    items += [(None, None, poly) for poly in obstacles or []]
+    tree = STRtree([it[2] for it in items]) if items else None
     out = []
     for wl in lines:
         ps = sorted(wl.pieces, key=lambda p: p.s1)
@@ -452,9 +464,33 @@ def find_gaps(lines: list[WallLine], s: Settings, tol: float) -> list[GapCandida
         cur = ps[0]
         for b in ps[1:]:
             g = b.s1 - cur.s2
-            if g > tol and s.min_opening - tol <= g <= s.max_opening + tol and \
+            if g > tol and s.min_opening - tol <= g <= 3 * s.max_opening and \
                     min(cur.v2, b.v2) - max(cur.v1, b.v1) > tol:
-                out.append(GapCandidate(wl, cur.s2, b.s1, min(cur.v1, b.v1), max(cur.v2, b.v2), "gap", cur))
+                v1, v2 = min(cur.v1, b.v1), max(cur.v2, b.v2)
+                region = Rect(wl.frame.theta, v1 + tol, v2 - tol, cur.s2 + tol, b.s1 - tol).polygon(wl.frame)
+                covered = []
+                for k in tree.query(region):
+                    owl, _, poly = items[k]
+                    if owl is wl or not poly.intersects(region):
+                        continue
+                    ss = [wl.frame.local(x, y)[0] for x, y in shapely.get_coordinates(poly.intersection(region))]
+                    if ss:
+                        covered.append((min(ss) - tol, max(ss) + tol))
+                free = [[cur.s2, b.s1]]
+                for c1, c2 in sorted(covered):
+                    nxt = []
+                    for f1, f2 in free:
+                        if c2 <= f1 or c1 >= f2:
+                            nxt.append([f1, f2])
+                            continue
+                        if c1 > f1:
+                            nxt.append([f1, c1])
+                        if c2 < f2:
+                            nxt.append([c2, f2])
+                    free = nxt
+                for f1, f2 in free:
+                    if s.min_opening - tol <= f2 - f1 <= s.max_opening + tol:
+                        out.append(GapCandidate(wl, f1, f2, v1, v2, "gap", cur))
             if b.s2 > cur.s2:
                 cur = b
     return out
@@ -555,6 +591,44 @@ def pieces_to_walls(lines: list[WallLine]) -> list[Wall]:
     return walls
 
 
+def solid_region_walls(d: Drawing, lines: list[WallLine], s: Settings, tol: float) -> list[Polygon]:
+    """Solid (filled) wall regions not explained by any wall rectangle: junction blocks,
+    columns, odd-shaped piers.  Only for traced bitmaps, where every filled region is wall."""
+    holes = d.meta.get("fill_is_hole") or [False] * len(d.fills)
+    outer = [Polygon(f).buffer(0) for f, h in zip(d.fills, holes) if not h and len(f) >= 3]
+    inner = [Polygon(f).buffer(0) for f, h in zip(d.fills, holes) if h and len(f) >= 3]
+    if not outer:
+        return []
+    solid = unary_union(outer).difference(unary_union(inner)) if inner else unary_union(outer)
+    covered = unary_union([p.polygon(wl.frame) for wl in lines for p in wl.pieces])
+    extra = solid.difference(covered.buffer(tol * 0.5, join_style=2))
+    extra = extra.buffer(-tol, join_style=2).buffer(tol, join_style=2)  # drop pixel slivers
+    t = s.min_wall_thickness
+    out = []
+    for g in getattr(extra, "geoms", [extra]):
+        if g.is_empty or g.area < t * t:
+            continue
+        mrr = g.minimum_rotated_rectangle
+        xy = np.asarray(mrr.exterior.coords)[:4]
+        short = min(np.hypot(*(xy[1] - xy[0])), np.hypot(*(xy[2] - xy[1])))
+        touching = g.distance(covered) <= 2 * tol
+        rect_like = g.area >= 0.6 * mrr.area  # arrowheads / symbols are triangular
+        if short >= 0.8 * t and g.area >= 4 * t * t and rect_like and (touching or g.area >= 9 * t * t):
+            out.append(g)
+    return out
+
+
+def _poly_wall(wid: str, g: Polygon) -> Wall:
+    xy = np.asarray(g.minimum_rotated_rectangle.exterior.coords)[:4]
+    e1, e2 = xy[1] - xy[0], xy[2] - xy[1]
+    if np.hypot(*e1) >= np.hypot(*e2):
+        p1, p2, t = (xy[0] + xy[3]) / 2, (xy[1] + xy[2]) / 2, np.hypot(*e2)
+    else:
+        p1, p2, t = (xy[0] + xy[1]) / 2, (xy[3] + xy[2]) / 2, np.hypot(*e1)
+    return Wall(wid, (float(p1[0]), float(p1[1])), (float(p2[0]), float(p2[1])), round(float(t), 3),
+                [(float(x), float(y)) for x, y in list(g.exterior.coords)[:-1]])
+
+
 def detect(d: Drawing, s: Settings, log: Log) -> tuple[list[Wall], list[Opening], list[WallLine]]:
     from .openings import OpeningContext, classify_gap, find_end_openings
 
@@ -568,15 +642,20 @@ def detect(d: Drawing, s: Settings, log: Log) -> tuple[list[Wall], list[Opening]
         return [], [], []
     lines = group_lines(rects, tol, s.max_opening)
     for wl in lines:
-        classify_rects(wl, tol)
+        classify_rects(wl, tol, allow_fillers=d.meta.get("raster_mode") != "solid")
     n_fill = sum(len(wl.fillers) for wl in lines)
     ext = extend_junctions(lines, s, tol)
+    for wl in lines:  # hair-line cracks (symbols touching a wall) are far below any opening width
+        _merge_pieces(wl, max(2 * tol, 3 * d.pixel_size) if d.raster else tol, max(3 * tol, 0.25 * s.min_opening))
     log.info(f"{len(lines)} wall lines, {sum(len(wl.pieces) for wl in lines)} wall pieces; "
              f"{ext} corner/T-junction fills; {n_fill} glazing fillers")
 
+    solid_walls = solid_region_walls(d, lines, s, tol) if d.meta.get("raster_mode") == "solid" else []
+    if solid_walls:
+        log.info(f"{len(solid_walls)} additional wall part(s) taken from solid regions (junctions, columns)")
     ctx = OpeningContext.build(d, s, merged, lines, tol)
     openings: list[Opening] = []
-    cands = find_gaps(lines, s, tol)
+    cands = find_gaps(lines, s, tol, solid_walls)
     sections = find_sill_sections(lines, merged, s, tol)
     for g in cands + sections:
         op = classify_gap(g, ctx, s, require_evidence=(g.source == "section"))
@@ -586,10 +665,15 @@ def detect(d: Drawing, s: Settings, log: Log) -> tuple[list[Wall], list[Opening]
             split_piece_at(g.wl, g.host, g.s1, g.s2, tol)
         openings.append(op)
     openings += find_end_openings(lines, ctx, s, tol, openings)
+    if solid_walls:  # an "opening" inside a solid junction block is an artefact
+        su = unary_union(solid_walls)
+        openings = [o for o in openings if Polygon(o.polygon).intersection(su).area < 0.5 * Polygon(o.polygon).area]
     # drop tiny slivers left after splitting
     for wl in lines:
         wl.pieces = [p for p in wl.pieces if p.s2 - p.s1 > tol]
     walls = pieces_to_walls(lines)
+    for k, poly in enumerate(solid_walls):
+        walls.append(_poly_wall(f"S{k + 1}", poly))
     counters: dict[str, int] = {}
     for op in sorted(openings, key=lambda o: (o.type, -round(o.p1[1]), round(o.p1[0]))):
         counters[op.type] = counters.get(op.type, 0) + 1

@@ -99,6 +99,8 @@ def analyse(path: Path, settings: Settings, log: Log) -> tuple[Plan, Drawing, Ca
     if dmm.meta.get("wall_height_mm"):
         log.info(f"Wall height taken from the 3D model: {plan.wall_height:.0f} mm")
     plan.calibration = cal.summary()
+    # weld distance for the wall union (bitmap pieces only touch to within a pixel)
+    plan.calibration["weld_mm"] = round(1.5 * dmm.pixel_size, 2) if dmm.raster else 0.5
     plan.source = {"file": path.name, "format": drawing.source_format}
 
     log.step("Building dimension report")

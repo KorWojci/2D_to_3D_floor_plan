@@ -11,6 +11,32 @@ from .model import Plan
 
 WALL_COLOR = [228, 226, 220, 255]
 FLOOR_COLOR = [196, 170, 130, 255]
+CEILING_COLOR = [245, 245, 242, 255]
+
+
+def _add_plate(scene: trimesh.Scene, footprint, walls, z: float, t: float, color, name: str, log: Log) -> None:
+    """Floor / ceiling placeholder: a surface over the rooms at height ``z`` (t = 0) or a slab of
+    thickness |t| over the whole footprint (t < 0 below z, t > 0 above z)."""
+    if footprint.is_empty:
+        return
+    if t:
+        z0, z1 = (z + t, z) if t < 0 else (z, z + t)
+        parts = _extrude(footprint, z0, z1)
+    else:
+        parts = []
+        for p in _polys(footprint.difference(walls)):
+            v2, f = trimesh.creation.triangulate_polygon(p)
+            v3 = np.column_stack([v2, np.full(len(v2), z)])
+            m = trimesh.Trimesh(v3, f)
+            if name == "ceiling":
+                m.invert()  # the visible side of a ceiling faces down
+            parts.append(m)
+    mesh = trimesh.util.concatenate(parts) if parts else None
+    if mesh is not None and len(mesh.faces):
+        _paint(mesh, color, name)
+        scene.add_geometry(mesh, node_name=name, geom_name=name)
+        kind = f"slab {abs(t):g} mm" if t else "surface"
+        log.info(f"{name.capitalize()} placeholder: {kind} at {z:g} mm, {footprint.area / 1e6:.1f} m² footprint")
 
 
 def _paint(mesh: trimesh.Trimesh, rgba: list[int], name: str) -> None:
@@ -63,7 +89,7 @@ def _union(meshes: list[trimesh.Trimesh], log: Log) -> trimesh.Trimesh:
 
 def build_scene(plan: Plan, log: Log) -> trimesh.Scene:
     H = plan.wall_height
-    walls = unary_union([Polygon(w.polygon).buffer(0) for w in plan.walls])
+    walls = wall_geometry(plan)
     # z levels where the cross-section changes
     levels = {0.0, H}
     for o in plan.openings:
@@ -83,23 +109,31 @@ def build_scene(plan: Plan, log: Log) -> trimesh.Scene:
     scene.add_geometry(wall_mesh, node_name="walls", geom_name="walls")
     log.info(f"3D walls: {len(wall_mesh.faces)} triangles, watertight={wall_mesh.is_watertight}, "
              f"height {H:g} mm, {len(plan.openings)} recesses")
-    if plan.settings.floor:
-        allp = unary_union([walls] + [Polygon(o.polygon).buffer(0) for o in plan.openings])
-        footprint = unary_union([Polygon(p.exterior) for p in _polys(allp)])
-        t = plan.settings.floor_thickness
-        if t > 0:
-            floor = trimesh.util.concatenate(_extrude(footprint, -t, 0.0))
-        else:
-            parts = []
-            for p in _polys(footprint.difference(walls)):
-                v2, f = trimesh.creation.triangulate_polygon(p)
-                v3 = np.column_stack([v2, np.zeros(len(v2))])
-                parts.append(trimesh.Trimesh(v3, f))
-            floor = trimesh.util.concatenate(parts) if parts else None
-        if floor is not None and len(floor.faces):
-            _paint(floor, FLOOR_COLOR, "floor")
-            scene.add_geometry(floor, node_name="floor", geom_name="floor")
+    st = plan.settings
+    if st.floor or st.ceiling:
+        footprint = building_footprint(plan)
+        if st.floor:
+            _add_plate(scene, footprint, walls, 0.0, -st.floor_thickness, FLOOR_COLOR, "floor", log)
+        if st.ceiling:
+            _add_plate(scene, footprint, walls, H, st.ceiling_thickness, CEILING_COLOR, "ceiling", log)
     return scene
+
+
+def wall_geometry(plan: Plan):
+    """Union of all wall pieces, welded: pieces traced from a bitmap touch only to within a
+    pixel, which would leave hair-line slits in the model.  The weld distance is stored by the
+    pipeline (1.5 px for bitmaps, 0.5 mm otherwise)."""
+    u = unary_union([Polygon(w.polygon).buffer(0) for w in plan.walls]) if plan.walls else Polygon()
+    c = float(plan.calibration.get("weld_mm", 0.5)) if plan.calibration else 0.5
+    return u.buffer(c, join_style=2).buffer(-c, join_style=2) if c > 0 and not u.is_empty else u
+
+
+def building_footprint(plan: Plan):
+    """Outline of the flat (walls + openings, rooms filled)."""
+    allp = unary_union([wall_geometry(plan)] + [Polygon(o.polygon).buffer(0) for o in plan.openings])
+    c = max(2.0, float(plan.calibration.get("weld_mm", 0.5)) if plan.calibration else 2.0)
+    allp = allp.buffer(c, join_style=2).buffer(-c, join_style=2)
+    return unary_union([Polygon(p.exterior) for p in _polys(allp) if p.area > 1e4])
 
 
 def single_mesh(scene: trimesh.Scene, solids_only: bool = False) -> trimesh.Trimesh:

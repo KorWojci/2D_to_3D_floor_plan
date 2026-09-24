@@ -68,7 +68,7 @@ def test_raster_with_paper_scale(samples):
 
 def test_raster_with_known_size(samples):
     plan, _, _ = analyse(samples["png"], Settings(known_width_mm=10000, known_height_mm=7000), Log())
-    _check(plan, tol_size=1, tol_open=15, area_tol=0.03)
+    _check(plan, tol_size=1, tol_open=20, area_tol=0.03)  # bitmap: ±3 px of 6.35 mm
 
 
 def test_raster_without_scale_is_flagged(samples):
@@ -121,3 +121,46 @@ def test_cad_blocks_hatch_metres(samples):
     _check(plan)
     assert cal.confidence == "header"
     assert all("block/layer" in " ".join(o.evidence) for o in plan.openings)
+
+
+def test_floor_ceiling_placeholders(samples, tmp_path):
+    """Placeholders are separate objects; slabs in a 3D model do not shift sill/head heights."""
+    import trimesh
+
+    plan, _, _ = analyse(samples["dxf"], Settings(floor_thickness=200, ceiling_thickness=250), Log())
+    export_all(plan, ["glb", "obj"], tmp_path, "flat", Log())
+    glb = trimesh.load(tmp_path / "flat_3d.glb", force="scene")
+    assert {"walls", "floor", "ceiling"} <= set(glb.geometry)
+    b = {k: g.bounds for k, g in glb.geometry.items()}  # mesh data in mm, Z-up (node transform -> m, Y-up)
+    assert abs(b["floor"][0][2] + 200) < 1e-6 and abs(b["floor"][1][2]) < 1e-6
+    assert abs(b["ceiling"][0][2] - 2700) < 1e-6 and abs(b["ceiling"][1][2] - 2950) < 1e-6
+    plan2, _, _ = analyse(tmp_path / "flat_3d.obj", Settings(), Log())
+    _check(plan2)
+    assert abs(plan2.wall_height - 2700) < 1
+    for o in plan2.openings:
+        assert abs(o.head - 2100) < 1 and abs(o.sill - (900 if o.type == "window" else 0)) < 1
+    plan3, _, _ = analyse(samples["dxf"], Settings(floor=False, ceiling=False), Log())
+    export_all(plan3, ["glb"], tmp_path / "none", "flat", Log())
+    assert set(trimesh.load(tmp_path / "none" / "flat_3d.glb", force="scene").geometry) == {"walls"}
+
+
+def _has_ocr() -> bool:
+    try:
+        import rapidocr_onnxruntime  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(not _has_ocr(), reason="rapidocr-onnxruntime not installed")
+def test_real_estate_agent_bitmap():
+    """samples/real/house_plan.webp: low-res bitmap, scale only from its written dimensions."""
+    plan, _, cal = analyse(ROOT / "samples" / "real" / "house_plan.webp", Settings(), Log())
+    assert cal.confidence == "dimensions"
+    x0, _, x1, _ = plan.bbox()
+    assert abs((x1 - x0) - 9000) < 60  # 3,35 m + 5,65 m (±1.5 px at 21 mm/px)
+    kinds = [o.type for o in plan.openings]
+    assert kinds.count("window") == 5
+    assert kinds.count("door") >= 8
+    terrace = [o for o in plan.openings if o.width > 4000]
+    assert len(terrace) == 1 and terrace[0].type == "door" and abs(terrace[0].width - 4800) < 60

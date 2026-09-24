@@ -32,6 +32,60 @@ The page is laid out like Visual Studio Code in dark mode:
 
 `Ctrl+B` hides or shows the side bar, and `Ctrl+Enter` starts the conversion.
 
+## Settings reference
+
+Every setting is optional. In the web page they sit in the side bar sections **Heights &
+placeholders**, **Scale & units** and **Detection**. Through the API, send them as the JSON
+`options` field of `POST /api/jobs` using the key shown. All lengths are in millimetres.
+
+### Heights & placeholders
+
+| Setting (API key) | Default | What it does |
+|---|---|---|
+| Wall height (`wall_height`) | 2700 | Height of all walls, from the floor to the ceiling. 3D models you import use the height measured in the model instead. |
+| Door height (`door_height`) | 2100 | Top of door and passage recesses. Above it, a lintel fills the wall up to the ceiling. |
+| Window sill (`window_sill`) | 900 | Bottom of window recesses. The wall is solid below it. |
+| Window head (`window_head`) | 2100 | Top of window recesses. A lintel fills the wall above it. |
+| Floor placeholder (`floor`) | on | Adds a separate `floor` object under the whole flat. Turn it off to export walls only. |
+| Floor thickness (`floor_thickness`) | 0 | **0**: a flat surface at floor level, covering the rooms. **More than 0**: a slab of that thickness below the floor, covering the whole footprint. |
+| Ceiling placeholder (`ceiling`) | on | Adds a separate `ceiling` object at wall height. |
+| Ceiling thickness (`ceiling_thickness`) | 0 | **0**: a flat surface facing down. **More than 0**: a slab of that thickness on top of the walls. |
+
+The placeholders are separate objects named `floor` and `ceiling` in GLB/glTF/OBJ/3MF/3D
+DXF, and IfcSlab (FLOOR / ROOF) in IFC. IFC can't hold a zero-thickness slab, so there it is
+200 mm thick unless you set a thickness. STL/3MF leave out zero-thickness surfaces so the
+print solid stays watertight. The **floor / ceiling** checkboxes in the 3D preview only
+change the view, not the files; the ceiling starts hidden so you can look inside.
+
+### Scale & units: only needed when the drawing has no readable dimensions
+
+| Setting (API key) | Default | What it does |
+|---|---|---|
+| Units of numbers (`units`) | auto | The unit of the numbers written in the drawing (`mm`, `cm`, `m`, `in`, `ft`). If the drawing has no dimensions, this is the unit of the drawing's coordinates. On *auto*, the unit comes from explicit suffixes ("3,45 m"), the file header, or the flat size that is plausible. |
+| Paper scale 1 : (`paper_scale`) | – | The drawing scale of a PDF, SVG or scan, e.g. `50` for 1:50. Combined with the paper size (PDF/SVG) or the DPI (bitmaps). |
+| Overall width (`known_width_mm`) | – | The real outer width (X) of the walls. The whole plan is scaled so that its wall outline has exactly this width. This overrides every other scale source and warns you if it disagrees with the drawing's own dimensions. |
+| Overall depth (`known_height_mm`) | – | The same for the Y direction. If you give only one of the two, it is used for both axes. |
+| Image DPI (`dpi`) | from file | The resolution of a scan, used together with the paper scale. Normally read from the image file. |
+
+### Detection
+
+| Setting (API key) | Default | What it does |
+|---|---|---|
+| Min wall thickness (`min_wall_thickness`) | 60 | Two parallel lines closer than this are not a wall. Lower it for very thin partitions. |
+| Max wall thickness (`max_wall_thickness`) | 550 | Two parallel lines further apart than this are not a wall. Raise it for thick old walls (600+). Lowering it helps if kitchen counters or wardrobes turn into walls. |
+| Min opening width (`min_opening`) | 350 | Gaps in a wall narrower than this are closed, not treated as openings. |
+| Max opening width (`max_opening`) | 5000 | Wider gaps are treated as the end of a wall. Raise it for very wide glazing. |
+| Wall layers (`wall_layers`) | auto | Comma-separated parts of CAD layer names that hold walls, e.g. `A-WALL, MUR`. Common names in many languages are recognised automatically. |
+| Door layers (`door_layers`) | auto | The same for doors (layer or block names). |
+| Window layers (`window_layers`) | auto | The same for windows. |
+| 3D cut height (`slice_height`) | 1300 | 3D imports only: the height above the floor where the model is cut to read the plan. It must pass through windows and doors (between the sill and head heights). |
+
+### Output formats
+
+The API equivalent is the `formats` form field, a comma-separated list: `dxf, dwg, svg,
+pdf, png, json, glb, gltf, obj, stl, ply, off, 3mf, dxf3d, ifc`. A finished job can export
+more formats later (`POST /api/jobs/{id}/export`) without analysing the drawing again.
+
 Sample drawings with a known ground truth are in `samples/`. Regenerate them with
 `python samples/generate_samples.py`.
 
@@ -43,14 +97,14 @@ Sample drawings with a known ground truth are in `samples/`. Regenerate them wit
 | **DWG** | converted to DXF with ODA File Converter or LibreDWG (`dwg2dxf`) |
 | **PDF** | vector drawings (lines, curves, fills, text); scanned pages are traced as images |
 | **SVG** | paths, shapes, transforms, text |
-| **PNG, JPG, BMP, TIFF, WEBP, GIF** | walls traced from thick strokes, door swings / glazing read from thin lines |
+| **PNG, JPG, BMP, TIFF, WEBP, GIF** | walls traced from solid (black) strokes and snapped to the drawing's axes; door swings, glazing and sliding doors read from the thin lines; **dimension texts read by OCR** (RapidOCR) and measured on their dimension lines; room names such as "taras"/"balcony" mark terrace doors |
 | **OBJ, STL, PLY, OFF, GLB, glTF, 3MF, DAE, IFC** | the model is cut at 1.3 m; a low cut and vertical ray casts separate doors from windows and **measure real sill and head heights** |
 
 | Export 2D | Export 3D |
 |---|---|
 | **DXF** 2018: layers WALLS, WALLS_HATCH, DOORS, WINDOWS, OPENINGS, LABELS, DIMENSIONS / _DERIVED / _COMPUTED | **GLB / glTF** (metres, Y-up as the spec requires) |
 | **DWG**, via ODA File Converter or LibreDWG, read back to verify | **OBJ, STL, PLY, OFF, 3MF** (mm, Z-up; STL/3MF watertight) |
-| **SVG, PDF** (vector, 1:50), **PNG** | **IFC4** (IfcWall + IfcOpeningElement + IfcDoor / IfcWindow) |
+| **SVG, PDF** (vector, 1:50), **PNG** | **IFC4** (IfcWall + IfcOpeningElement + IfcDoor / IfcWindow, IfcSlab floor/ceiling) |
 | **JSON**: walls, openings and dimensions in mm | **DXF 3D** (MESH entities) |
 
 Every import format is converted to one clean, layered plan in millimetres. That plan
@@ -89,6 +143,7 @@ The report tab and the JSON export label every value as `stated`, `derived` or
 | OBJ / GLB / PLY / 3MF / IFC | exact | exact, sill and head measured from the model |
 | PNG 200 dpi with paper scale | ±0.4 % | ±1 px (≈ 6 mm) |
 | PNG with a known overall size | exact | ±1 px |
+| Real estate-agent plan (`samples/real/house_plan.webp`, 676×806 px, ≈21 mm/px) | 9.03 m against the dimensioned 9.00 m (scale from the plan's own dimensions via OCR) | found: 5 windows, 7 swing doors (1 balcony door with side panel), 1 sliding terrace door (4.8 m), 1 entrance door; 1 swing door (boiler room) read as an open passage, 1 real passage |
 
 ## Development
 
