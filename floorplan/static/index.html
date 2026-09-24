@@ -4,79 +4,177 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Floor plan 2D → 3D</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M1 1h14v14H1z M3 3v10h4V9h2v4h4V3z%22 fill=%22%232f6fdb%22 fill-rule=%22evenodd%22/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M1 1h14v14H1z M3 3v10h4V9h2v4h4V3z%22 fill=%22%23007acc%22 fill-rule=%22evenodd%22/%3E%3C/svg%3E">
 <style>
+  /* Visual Studio Code "Dark+" colours */
   :root {
-    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --line: #e2e2de;
-    --accent: #2f6fdb; --ok: #1e8449; --warn: #b9770e; --err: #c0392b; --code: #fafaf8;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #151516; --panel: #1f1f21; --text: #ececee; --muted: #9a9aa0; --line: #333337;
-            --accent: #5b8fef; --ok: #52be80; --warn: #f0b429; --err: #ec7063; --code: #19191b; }
+    color-scheme: dark;
+    --titlebar: #3c3c3c; --activity: #333333; --sidebar: #252526; --editor: #1e1e1e; --panel: #1e1e1e;
+    --tab: #2d2d2d; --tab-active: #1e1e1e; --border: #2b2b2b; --border-strong: #454545;
+    --text: #cccccc; --text-bright: #e7e7e7; --muted: #8b8b8b; --heading: #bbbbbb;
+    --input: #3c3c3c; --input-border: #3c3c3c; --focus: #007fd4;
+    --button: #0e639c; --button-hover: #1177bb; --link: #3794ff;
+    --hover: #2a2d2e; --selection: #04395e; --badge: #4d4d4d;
+    --status: #007acc; --status-error: #c72e0f;
+    --ok: #89d185; --warn: #cca700; --err: #f48771; --comment: #6a9955; --string: #ce9178; --number: #b5cea8; --type: #4ec9b0;
+    --mono: "Cascadia Code", Consolas, "Courier New", ui-monospace, monospace;
+    --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Ubuntu, "Droid Sans", sans-serif;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
-  header { padding: 14px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
-  header span { color: var(--muted); font-size: 13px; }
-  main { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 16px; max-width: 1500px; margin: 0 auto; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
-  .drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 22px 12px; text-align: center; cursor: pointer; color: var(--muted); transition: border-color .15s; }
-  .drop.over, .drop:hover { border-color: var(--accent); color: var(--text); }
-  .drop strong { color: var(--text); display: block; margin-bottom: 4px; word-break: break-all; }
+  html, body { height: 100%; }
+  body { margin: 0; font: 13px/1.4 var(--ui); background: var(--editor); color: var(--text); overflow: hidden; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgba(121, 121, 121, .4); }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(100, 100, 100, .7); }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  * { scrollbar-color: rgba(121, 121, 121, .4) transparent; }
+
+  .workbench { display: grid; grid-template-rows: 30px 1fr 22px; height: 100vh; }
+
+  /* title bar */
+  .titlebar { background: var(--titlebar); display: flex; align-items: center; justify-content: center; position: relative; font-size: 12px; color: var(--text); user-select: none; }
+  .titlebar .logo { position: absolute; left: 12px; display: flex; }
+  .titlebar .menu { position: absolute; left: 40px; display: flex; gap: 2px; }
+  .titlebar .menu span { padding: 2px 7px; border-radius: 4px; color: var(--text); }
+  .titlebar .title { color: var(--text); }
+  .titlebar .title b { font-weight: 400; color: var(--muted); }
+
+  .body { display: grid; grid-template-columns: 48px auto 1fr; min-height: 0; }
+
+  /* activity bar */
+  .activity { background: var(--activity); display: flex; flex-direction: column; align-items: center; }
+  .activity button { width: 48px; height: 48px; background: none; border: 0; border-left: 2px solid transparent; color: #858585; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  .activity button:hover { color: #fff; }
+  .activity button.on { color: #fff; border-left-color: #fff; }
+  .activity .grow { flex: 1; }
+
+  /* side bar */
+  .sidebar { background: var(--sidebar); width: 300px; overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--border); }
+  .sidebar-title { height: 35px; padding: 0 20px; display: flex; align-items: center; font-size: 11px; color: var(--heading); letter-spacing: .02em; text-transform: uppercase; }
+  details.pane { border-top: 1px solid var(--border-strong); }
+  details.pane > summary { list-style: none; height: 22px; display: flex; align-items: center; gap: 2px; padding-left: 2px; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--heading); text-transform: uppercase; user-select: none; }
+  details.pane > summary::-webkit-details-marker { display: none; }
+  details.pane > summary::before { content: ""; width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--chev) center / 16px no-repeat; mask: var(--chev) center / 16px no-repeat; transform: rotate(0deg); transition: transform .1s; }
+  details.pane[open] > summary::before { transform: rotate(90deg); }
+  details.pane > summary:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+  :root { --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6 4l4 4-4 4' fill='none' stroke='black' stroke-width='1.3'/%3E%3C/svg%3E"); }
+  .pane-body { padding: 6px 12px 12px 20px; }
+
+  .drop { border: 1px dashed var(--border-strong); padding: 16px 10px; text-align: center; cursor: pointer; color: var(--muted); font-size: 12px; }
+  .drop.over, .drop:hover { border-color: var(--focus); background: var(--hover); }
+  .drop strong { color: var(--text-bright); font-weight: 400; display: flex; justify-content: center; gap: 6px; align-items: center; margin-bottom: 4px; word-break: break-all; font-size: 13px; }
   input[type=file] { display: none; }
-  details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
-  summary { cursor: pointer; font-weight: 600; font-size: 13px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; margin-top: 10px; }
-  label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
-  label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
-  input[type=number], input[type=text], select { width: 100%; padding: 6px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); color: var(--text); font: inherit; }
-  .fmts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 2px; }
-  .fmts label { flex-direction: row; align-items: center; gap: 5px; color: var(--text); font-size: 13px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  label { font-size: 12px; color: var(--text); display: flex; flex-direction: column; gap: 3px; }
+  label.check { flex-direction: row; align-items: center; gap: 6px; }
+  input[type=number], input[type=text], select {
+    width: 100%; height: 26px; padding: 3px 6px; border: 1px solid var(--input-border); border-radius: 2px;
+    background: var(--input); color: var(--text); font: 13px var(--ui); outline: none; }
+  input[type=number]:focus, input[type=text]:focus, select:focus { border-color: var(--focus); }
+  input::placeholder { color: #a6a6a6; opacity: .6; }
+  select option { background: #252526; }
+  input[type=checkbox] { appearance: none; width: 16px; height: 16px; margin: 0; flex: none; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--input); cursor: pointer; display: grid; place-content: center; }
+  input[type=checkbox]:checked::after { content: ""; width: 10px; height: 10px; background: var(--text-bright); -webkit-mask: var(--tick) center / 10px no-repeat; mask: var(--tick) center / 10px no-repeat; }
+  input[type=checkbox]:focus-visible { outline: 1px solid var(--focus); }
+  input[type=checkbox]:disabled { opacity: .4; cursor: default; }
+  :root { --tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1 5.2l2.6 2.6L9 2.2' fill='none' stroke='black' stroke-width='1.6'/%3E%3C/svg%3E"); }
+
+  .fmts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px 8px; margin: 4px 0 8px; }
+  .fmts label { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; }
   .fmts label.na { color: var(--muted); text-decoration: line-through; }
-  .sub { font-size: 11px; color: var(--muted); margin-top: 8px; }
-  button { font: inherit; border: 0; border-radius: 7px; padding: 9px 14px; cursor: pointer; background: var(--accent); color: #fff; font-weight: 600; }
-  button:disabled { opacity: .45; cursor: default; }
-  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); font-weight: 500; padding: 6px 10px; }
-  #go { width: 100%; margin-top: 14px; }
-  #log { background: var(--code); border: 1px solid var(--line); border-radius: 8px; height: 230px; overflow: auto; padding: 8px 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
-  #log .step { color: var(--accent); font-weight: 600; margin-top: 4px; }
-  #log .warn { color: var(--warn); }
-  #log .error { color: var(--err); font-weight: 600; }
-  #log .t { color: var(--muted); }
-  .right { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
-  .tabs button { background: transparent; color: var(--muted); padding: 6px 10px; font-weight: 500; border-radius: 6px; }
-  .tabs button.on { background: var(--code); color: var(--text); border: 1px solid var(--line); }
+  .sub { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  button { font: 13px var(--ui); }
+  .btn { width: 100%; border: 0; border-radius: 2px; padding: 5px 14px; min-height: 26px; cursor: pointer; background: var(--button); color: #fff; }
+  .btn:hover:not(:disabled) { background: var(--button-hover); }
+  .btn:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn.secondary { background: #3a3d41; width: auto; }
+  .btn.secondary:hover:not(:disabled) { background: #45494e; }
+  #go { margin-top: 10px; }
+
+  /* downloads: explorer-like file list */
+  #files { list-style: none; padding: 0; margin: 0 -12px 0 -20px; }
+  #files li.legend { padding: 2px 20px; }
+  #files a { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 12px 0 20px; text-decoration: none; color: var(--text); white-space: nowrap; }
+  #files a:hover { background: var(--hover); }
+  #files a:focus { background: var(--selection); outline: 1px solid var(--focus); outline-offset: -1px; }
+  #files .ico { font: 700 9px var(--mono); width: 26px; text-align: center; flex: none; }
+  #files .name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  #files small { color: var(--muted); font-size: 11px; }
+  .more { display: flex; gap: 6px; align-items: center; margin-top: 10px; }
+  .more select { flex: 1; min-width: 0; }
+
+  /* editor area */
+  .main { display: grid; grid-template-rows: 35px 1fr 6px var(--panel-h, 240px); min-width: 0; min-height: 0; background: var(--editor); }
+  .tabs { display: flex; align-items: stretch; background: var(--sidebar); min-width: 0; }
+  .tabs button[data-tab] { display: flex; align-items: center; gap: 6px; padding: 0 14px 0 12px; border: 0; border-right: 1px solid var(--border); border-top: 1px solid transparent; background: var(--tab); color: #969696; cursor: pointer; white-space: nowrap; }
+  .tabs button[data-tab].on { background: var(--tab-active); color: #fff; border-top-color: var(--status); }
+  .tabs button[data-tab]:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+  .tabs .ext { font: 700 10px var(--mono); }
   .tabs .spacer { flex: 1; }
-  .view { height: 520px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--code); position: relative; }
-  .view > div { width: 100%; height: 100%; }
-  #v2d { overflow: auto; background: #fff; }
-  #v2d svg { width: 100%; height: 100%; }
+  .toggles { display: flex; gap: 12px; align-items: center; padding: 0 12px; font-size: 12px; }
+  .toggles label { flex-direction: row; align-items: center; gap: 5px; }
+  .view { position: relative; min-height: 0; overflow: hidden; }
+  .view > div { position: absolute; inset: 0; }
+  #v2d { overflow: auto; background: #fff; filter: invert(.88) hue-rotate(180deg); }
+  #v2d svg { width: 100%; height: 100%; display: block; }
   #v2d.hide-computed #dims-computed, #v2d.hide-derived #dims-derived, #v2d.hide-stated #dims-stated { display: none; }
-  #vrep { overflow: auto; padding: 12px; }
-  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
-  .toggles { display: flex; gap: 10px; font-size: 12px; }
-  .toggles label { flex-direction: row; align-items: center; gap: 4px; color: var(--text); }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 14px; }
-  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 500; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); }
-  .badge.dimensions, .badge.header, .badge.user { color: var(--ok); border-color: var(--ok); }
-  .badge.estimated { color: var(--warn); border-color: var(--warn); }
-  #files { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px; }
-  #files a { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; text-decoration: none; color: var(--text); }
-  #files a span { overflow-wrap: anywhere; min-width: 0; }
-  #files small { white-space: nowrap; }
-  #files a:hover { border-color: var(--accent); }
-  #files small { color: var(--muted); }
-  .more { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  .legend { font-size: 12px; color: var(--muted); }
-  .legend b.s { color: #333; } .legend b.d { color: #1e8449; } .legend b.c { color: #2471a3; }
+  #vrep { overflow: auto; padding: 16px 26px; }
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--muted); pointer-events: none; }
+  .empty svg { opacity: .25; }
+  .empty kbd { font: 11px var(--mono); background: #3a3d41; border: 1px solid #555; border-bottom-width: 2px; border-radius: 3px; padding: 1px 5px; color: var(--text); }
+
+  /* report (markdown-preview style) */
+  #vrep h3 { font-size: 13px; font-weight: 600; color: var(--text-bright); margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border-strong); }
+  #vrep h3:first-child { margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 6px; }
+  th, td { text-align: left; padding: 3px 10px; border-bottom: 1px solid #2f2f2f; vertical-align: top; }
+  th { color: var(--heading); font-weight: 600; }
+  tr:hover td { background: var(--hover); }
+  th.num { text-align: right; }
+  td.num { text-align: right; font: 12px var(--mono); color: var(--number); }
+  td.id { font-family: var(--mono); color: var(--type); }
+  .badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 2px; background: var(--badge); color: #fff; }
+  .badge.ok { background: #16825d; }
+  .badge.estimated { background: #9e6a03; }
+
+  /* bottom panel */
+  .sash { cursor: ns-resize; background: transparent; border-top: 1px solid var(--border-strong); }
+  .sash:hover, .sash.drag { background: var(--focus); }
+  .panel { display: grid; grid-template-rows: 35px 1fr; min-height: 0; background: var(--panel); }
+  .panel-tabs { display: flex; align-items: center; gap: 20px; padding: 0 20px; font-size: 11px; text-transform: uppercase; }
+  .panel-tabs span { color: #969696; padding: 6px 0 4px; border-bottom: 1px solid transparent; }
+  .panel-tabs span.on { color: #e7e7e7; border-bottom-color: #e7e7e7; }
+  .panel-tabs .count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: var(--badge); color: #fff; text-align: center; font-size: 10px; }
+  #log { overflow: auto; padding: 0 20px 8px; font: 12px/18px var(--mono); white-space: pre-wrap; color: var(--text); }
+  #log .t { color: var(--comment); }
+  #log .step { color: var(--link); }
+  #log .warn { color: var(--warn); }
+  #log .error { color: var(--err); }
+
+  /* status bar */
+  .statusbar { background: var(--status); color: #fff; display: flex; align-items: center; gap: 2px; padding: 0 6px; font-size: 12px; white-space: nowrap; overflow: hidden; }
+  .statusbar.error { background: var(--status-error); }
+  .statusbar.idle { background: #68217a; }
+  .statusbar span { padding: 0 6px; display: flex; align-items: center; gap: 4px; }
+  .statusbar .grow { flex: 1; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .legend { font-size: 11px; color: var(--muted); }
+  .legend b.s { color: #e0e0e0; } .legend b.d { color: #73c991; } .legend b.c { color: #75beff; }
+
+  @media (max-width: 900px) {
+    body { overflow: auto; }
+    .workbench { height: auto; min-height: 100vh; }
+    .body { grid-template-columns: 1fr; }
+    .activity { display: none; }
+    .sidebar { width: auto; border-right: 0; }
+    .main { grid-template-rows: 35px 60vh 6px 260px; }
+    .tabs { overflow-x: auto; }
+  }
 </style>
 <script type="importmap">
 { "imports": {
@@ -84,76 +182,108 @@
   "three/addons/": "/static/vendor/three/addons/"
 } }
 </script>
+
 </head>
 <body>
-<header>
-  <h1>Floor plan 2D → 3D</h1>
-  <span>walls · door recesses · window recesses — dimensions taken from the drawing</span>
-</header>
-<main>
-  <section>
-    <h2>1 · Import</h2>
-    <div class="drop" id="drop">
-      <strong id="fname">Drop a floor plan here or click</strong>
-      <span id="accepted">DXF, DWG, PDF, SVG, PNG/JPG…, OBJ/STL/GLB/IFC…</span>
-    </div>
-    <input type="file" id="file">
+<div class="workbench">
+  <div class="titlebar">
+    <span class="logo"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M1 1h14v14H1z M3 3v10h4V9h2v4h4V3z" fill="#007acc" fill-rule="evenodd"/></svg></span>
+    <span class="title" id="wintitle">Floor plan 2D → 3D</span>
+  </div>
 
-    <details>
-      <summary>Heights</summary>
-      <div class="grid">
-        <label>Wall height (mm)<input type="number" id="wall_height" value="2700" min="1000" step="10"></label>
-        <label>Door height (mm)<input type="number" id="door_height" value="2100" min="500" step="10"></label>
-        <label>Window sill (mm)<input type="number" id="window_sill" value="900" min="0" step="10"></label>
-        <label>Window head (mm)<input type="number" id="window_head" value="2100" min="100" step="10"></label>
-        <label class="check"><input type="checkbox" id="floor" checked> Floor surface</label>
-      </div>
-    </details>
-    <details>
-      <summary>Scale &amp; units (only if the drawing has no dimensions)</summary>
-      <div class="grid">
-        <label>Units of numbers
-          <select id="units"><option value="auto">auto</option><option>mm</option><option>cm</option><option>m</option><option>in</option><option>ft</option></select>
-        </label>
-        <label>Paper scale 1 :<input type="number" id="paper_scale" placeholder="e.g. 50, 100" min="1"></label>
-        <label>Known overall width (mm)<input type="number" id="known_width_mm" placeholder="outer walls, X" min="1"></label>
-        <label>Known overall depth (mm)<input type="number" id="known_height_mm" placeholder="outer walls, Y" min="1"></label>
-        <label>Image DPI (scans)<input type="number" id="dpi" placeholder="from file" min="1"></label>
-      </div>
-    </details>
-    <details>
-      <summary>Detection</summary>
-      <div class="grid">
-        <label>Min wall thickness<input type="number" id="min_wall_thickness" value="60" min="1"></label>
-        <label>Max wall thickness<input type="number" id="max_wall_thickness" value="550" min="10"></label>
-        <label>Min opening width<input type="number" id="min_opening" value="350" min="10"></label>
-        <label>Max opening width<input type="number" id="max_opening" value="3500" min="100"></label>
-        <label>Wall layer names<input type="text" id="wall_layers" placeholder="auto (e.g. A-WALL)"></label>
-        <label>Door layer names<input type="text" id="door_layers" placeholder="auto"></label>
-        <label>Window layer names<input type="text" id="window_layers" placeholder="auto"></label>
-        <label>3D import cut height<input type="number" id="slice_height" value="1300" min="100"></label>
-      </div>
-    </details>
+  <div class="body">
+    <nav class="activity" aria-label="Activity bar">
+      <button class="on" id="act-explorer" title="Converter (Ctrl+B toggles the side bar)" aria-label="Toggle side bar">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5"/><path d="M9 13l3-2 3 2v4H9z"/></svg>
+      </button>
+      <button id="act-settings" title="Settings" aria-label="Show settings">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+      </button>
+      <span class="grow"></span>
+    </nav>
 
-    <h2 style="margin-top:16px">2 · Output formats</h2>
-    <div class="sub" style="margin-top:0">2D drawing</div>
-    <div class="fmts" id="f2d"></div>
-    <div class="sub">3D model</div>
-    <div class="fmts" id="f3d"></div>
-    <button id="go" disabled>Convert</button>
-    <div class="sub" id="conv"></div>
-  </section>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-title">Floor plan converter</div>
 
-  <div class="right">
-    <section>
-      <h2>Log</h2>
-      <div id="log"><span class="t">Waiting for a file…</span></div>
-    </section>
-    <section>
-      <div class="tabs">
-        <button data-tab="v3d" class="on">3D preview</button>
-        <button data-tab="v2d">2D plan</button>
-        <button data-tab="vrep">Report</button>
+      <details class="pane" open>
+        <summary>Import</summary>
+        <div class="pane-body">
+          <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a floor plan file">
+            <strong id="fname">Drop a floor plan here or click</strong>
+            <span id="accepted">DXF, DWG, PDF, SVG, PNG/JPG…, OBJ/STL/GLB/IFC…</span>
+          </div>
+          <input type="file" id="file">
+          <button class="btn" id="go" disabled>Convert</button>
+          <div class="sub" id="conv"></div>
+        </div>
+      </details>
+
+      <details class="pane" open>
+        <summary>Output formats</summary>
+        <div class="pane-body">
+          <div class="sub" style="margin-top:0">2D drawing</div>
+          <div class="fmts" id="f2d"></div>
+          <div class="sub">3D model</div>
+          <div class="fmts" id="f3d"></div>
+        </div>
+      </details>
+
+      <details class="pane" open id="pane-downloads">
+        <summary>Downloads</summary>
+        <div class="pane-body">
+          <ul id="files"><li class="legend">No files yet.</li></ul>
+          <div class="more" id="more" hidden>
+            <select id="morefmt" aria-label="Additional format"></select>
+            <button class="btn secondary" id="morebtn">Export</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="pane settings">
+        <summary>Heights</summary>
+        <div class="pane-body grid">
+          <label>Wall height (mm)<input type="number" id="wall_height" value="2700" min="1000" step="10"></label>
+          <label>Door height (mm)<input type="number" id="door_height" value="2100" min="500" step="10"></label>
+          <label>Window sill (mm)<input type="number" id="window_sill" value="900" min="0" step="10"></label>
+          <label>Window head (mm)<input type="number" id="window_head" value="2100" min="100" step="10"></label>
+          <label class="check"><input type="checkbox" id="floor" checked> Floor surface</label>
+        </div>
+      </details>
+      <details class="pane settings">
+        <summary>Scale &amp; units</summary>
+        <div class="pane-body">
+          <div class="sub" style="margin:0 0 8px">Only needed when the drawing has no dimensions.</div>
+          <div class="grid">
+            <label>Units of numbers
+              <select id="units"><option value="auto">auto</option><option>mm</option><option>cm</option><option>m</option><option>in</option><option>ft</option></select>
+            </label>
+            <label>Paper scale 1 :<input type="number" id="paper_scale" placeholder="50, 100…" min="1"></label>
+            <label>Overall width (mm)<input type="number" id="known_width_mm" placeholder="outer walls, X" min="1"></label>
+            <label>Overall depth (mm)<input type="number" id="known_height_mm" placeholder="outer walls, Y" min="1"></label>
+            <label>Image DPI (scans)<input type="number" id="dpi" placeholder="from file" min="1"></label>
+          </div>
+        </div>
+      </details>
+      <details class="pane settings">
+        <summary>Detection</summary>
+        <div class="pane-body grid">
+          <label>Min wall thickness<input type="number" id="min_wall_thickness" value="60" min="1"></label>
+          <label>Max wall thickness<input type="number" id="max_wall_thickness" value="550" min="10"></label>
+          <label>Min opening width<input type="number" id="min_opening" value="350" min="10"></label>
+          <label>Max opening width<input type="number" id="max_opening" value="3500" min="100"></label>
+          <label>Wall layers<input type="text" id="wall_layers" placeholder="auto (A-WALL…)"></label>
+          <label>Door layers<input type="text" id="door_layers" placeholder="auto"></label>
+          <label>Window layers<input type="text" id="window_layers" placeholder="auto"></label>
+          <label>3D cut height<input type="number" id="slice_height" value="1300" min="100"></label>
+        </div>
+      </details>
+    </aside>
+
+    <div class="main" id="mainarea">
+      <div class="tabs" role="tablist">
+        <button data-tab="v3d" class="on" role="tab"><span class="ext" style="color:#4ec9b0">3D</span>preview.glb</button>
+        <button data-tab="v2d" role="tab"><span class="ext" style="color:#e2c08d">2D</span>plan.svg</button>
+        <button data-tab="vrep" role="tab"><span class="ext" style="color:#519aba">i</span>report.md</button>
         <span class="spacer"></span>
         <div class="toggles" id="dimtoggles" hidden>
           <label><input type="checkbox" data-dim="stated" checked> written</label>
@@ -165,20 +295,30 @@
         <div id="v3d"></div>
         <div id="v2d" hidden></div>
         <div id="vrep" hidden></div>
-        <div class="empty" id="empty">The preview appears here after conversion</div>
+        <div class="empty" id="empty">
+          <svg width="120" height="120" viewBox="0 0 16 16"><path d="M1 1h14v14H1z M3 3v10h4V9h2v4h4V3z" fill="#cccccc" fill-rule="evenodd"/></svg>
+          <div>Drop a floor plan in the side bar and press <kbd>Convert</kbd></div>
+          <div class="legend">Toggle side bar <kbd>Ctrl</kbd>+<kbd>B</kbd> · Convert <kbd>Ctrl</kbd>+<kbd>Enter</kbd></div>
+        </div>
       </div>
-      <p class="legend">Dimensions: <b class="s">black</b> written in the drawing · <b class="d">green</b> derived from other dimensions · <b class="c">blue dashed</b> computed from the calibrated geometry. All values in millimetres.</p>
-    </section>
-    <section>
-      <h2>Downloads</h2>
-      <ul id="files"><li class="legend">No files yet.</li></ul>
-      <div class="more" id="more" hidden>
-        <select id="morefmt"></select>
-        <button class="ghost" id="morebtn">Export this format too</button>
+      <div class="sash" id="sash" title="Drag to resize the panel"></div>
+      <div class="panel">
+        <div class="panel-tabs"><span class="on">Output</span><span class="legend" style="text-transform:none;border:0">Dimensions in 2D: <b class="s">white</b> written · <b class="d">green</b> derived · <b class="c">blue dashed</b> computed · mm</span></div>
+        <div id="log"><span class="t">Waiting for a file…</span></div>
       </div>
-    </section>
+    </div>
   </div>
-</main>
+
+  <footer class="statusbar idle" id="statusbar">
+    <span id="st-state">◌ Ready</span>
+    <span id="st-file"></span>
+    <span class="grow"></span>
+    <span id="st-size"></span>
+    <span id="st-open"></span>
+    <span>mm</span>
+    <span id="st-dwg"></span>
+  </footer>
+</div>
 
 <script type="module">
 import * as THREE from "three";
@@ -207,7 +347,15 @@ fetch("/api/formats").then(r => r.json()).then(f => {
   };
   mk($("f2d"), f.export["2d"]); mk($("f3d"), f.export["3d"]);
   $("conv").textContent = "DWG converter on server: " + f.dwg_converter;
+  $("st-dwg").textContent = "DWG: " + f.dwg_converter;
 });
+
+// ------------------------------------------------------------ status bar
+function status(state, text) {
+  const icon = { idle: "◌", busy: '<svg class="spin" width="12" height="12" viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 0 7 7" fill="none" stroke="currentColor" stroke-width="2"/></svg>', done: "✓", error: "✖" }[state];
+  $("statusbar").className = "statusbar" + (state === "error" ? " error" : state === "idle" ? " idle" : "");
+  $("st-state").innerHTML = `${icon} ${esc(text)}`;
+}
 
 // ------------------------------------------------------------ file input
 const drop = $("drop");
@@ -219,7 +367,10 @@ drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); setFil
 function setFile(f) {
   if (!f) return;
   file = f; $("fname").textContent = f.name; $("go").disabled = false;
+  $("st-file").textContent = f.name;
+  $("wintitle").innerHTML = `${esc(f.name)} <b>— Floor plan 2D → 3D</b>`;
 }
+drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
 
 // ------------------------------------------------------------ log
 function addLog(e) {
@@ -242,9 +393,10 @@ $("go").onclick = async () => {
   const fd = new FormData();
   fd.append("file", file); fd.append("options", JSON.stringify(opts)); fd.append("formats", fmts.join(","));
   $("go").disabled = true; $("log").innerHTML = ""; $("files").innerHTML = '<li class="legend">Working…</li>'; $("more").hidden = true;
+  status("busy", "Converting…"); $("st-size").textContent = ""; $("st-open").textContent = "";
   addLog({ t: 0, level: "info", msg: `Uploading ${file.name}…` });
   const r = await fetch("/api/jobs", { method: "POST", body: fd });
-  if (!r.ok) { addLog({ t: 0, level: "error", msg: (await r.json()).detail || r.statusText }); $("go").disabled = false; return; }
+  if (!r.ok) { addLog({ t: 0, level: "error", msg: (await r.json()).detail || r.statusText }); $("go").disabled = false; status("error", "Upload failed"); return; }
   job = (await r.json()).id;
   $("log").innerHTML = "";
   const es = new EventSource(`/api/jobs/${job}/events`);
@@ -252,6 +404,7 @@ $("go").onclick = async () => {
   es.addEventListener("done", (ev) => { es.close(); finished(JSON.parse(ev.data)); });
   es.addEventListener("error", (ev) => {
     es.close(); $("go").disabled = false;
+    status("error", "Conversion failed");
     if (ev.data) { const j = JSON.parse(ev.data); $("files").innerHTML = `<li class="legend">${esc(j.error)}</li>`; }
   });
 };
@@ -259,11 +412,16 @@ $("go").onclick = async () => {
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : (n / 1024).toFixed(1) + " kB";
 
+const EXT_ICON = { dxf: ["DXF", "#e2c08d"], dwg: ["DWG", "#e2c08d"], svg: ["SVG", "#ffb13b"], pdf: ["PDF", "#f14c4c"],
+  png: ["PNG", "#a074c4"], json: ["{ }", "#cbcb41"], glb: ["GLB", "#4ec9b0"], gltf: ["GLTF", "#4ec9b0"], obj: ["OBJ", "#519aba"],
+  stl: ["STL", "#519aba"], ply: ["PLY", "#519aba"], off: ["OFF", "#519aba"], "3mf": ["3MF", "#519aba"], ifc: ["IFC", "#89d185"] };
 function renderFiles(j) {
   $("files").innerHTML = j.files.length ? "" : '<li class="legend">No files were produced.</li>';
   for (const f of j.files) {
     const li = document.createElement("li");
-    li.innerHTML = `<a href="/api/jobs/${j.id}/files/${encodeURIComponent(f.name)}" download><span>${esc(f.name)}</span><small>${kb(f.size)}</small></a>`;
+    const ext = f.name.split(".").pop().toLowerCase();
+    const [lbl, col] = EXT_ICON[ext] || [ext.slice(0, 3).toUpperCase(), "#cccccc"];
+    li.innerHTML = `<a href="/api/jobs/${j.id}/files/${encodeURIComponent(f.name)}" download title="Download ${esc(f.name)}"><span class="ico" style="color:${col}">${lbl}</span><span class="name">${esc(f.name)}</span><small>${kb(f.size)}</small></a>`;
     $("files").appendChild(li);
   }
   $("more").hidden = false;
@@ -272,7 +430,13 @@ function renderFiles(j) {
 async function finished(j) {
   $("go").disabled = false;
   renderFiles(j);
+  $("pane-downloads").open = true;
   $("empty").hidden = true;
+  const s = j.summary || {};
+  status("done", `Done — ${s.walls} walls, ${s.doors} doors, ${s.windows} windows`);
+  if (s.size_mm) $("st-size").textContent = `${s.size_mm[0].toFixed(0)} × ${s.size_mm[1].toFixed(0)} × ${s.wall_height.toFixed(0)}`;
+  const est = s.calibration && s.calibration.confidence === "estimated";
+  $("st-open").textContent = est ? "⚠ scale estimated" : "✓ scale from " + (s.calibration ? s.calibration.method : "");
   load3d(`/api/jobs/${j.id}/preview/preview.glb?${Date.now()}`);
   const svg = await (await fetch(`/api/jobs/${j.id}/preview/preview.svg`)).text();
   $("v2d").innerHTML = svg;
@@ -295,20 +459,20 @@ function report(s) {
   if (!s) return;
   const c = s.calibration || {};
   const conf = c.confidence || "";
-  let h = `<table><tr><th>Overall size</th><td class="num">${s.size_mm[0].toFixed(0)} × ${s.size_mm[1].toFixed(0)} mm</td></tr>
+  let h = `<h3>Summary</h3><table><tr><th>Overall size</th><td class="num">${s.size_mm[0].toFixed(0)} × ${s.size_mm[1].toFixed(0)} mm</td></tr>
   <tr><th>Wall height</th><td class="num">${s.wall_height.toFixed(0)} mm</td></tr>
-  <tr><th>Scale source</th><td>${esc(c.method || "")} <span class="badge ${conf}">${conf === "estimated" ? "estimated – check!" : "reliable"}</span></td></tr>
+  <tr><th>Scale source</th><td>${esc(c.method || "")} <span class="badge ${conf === "estimated" ? "estimated" : "ok"}">${conf === "estimated" ? "estimated – check!" : "reliable"}</span></td></tr>
   <tr><th>Drawing unit</th><td class="num">${(c.mm_per_drawing_unit || 0).toPrecision(6)} mm</td></tr>
   <tr><th>Dimensions</th><td>${Object.entries(s.dimensions).map(([k, v]) => `${v} ${k}`).join(" · ")}</td></tr></table>`;
   if (s.derived.length) {
-    h += `<table><tr><th>Missing dimensions derived from others</th><th class="num">mm</th></tr>` +
+    h += `<h3>Missing dimensions derived from others</h3><table><tr><th>From → to</th><th class="num">mm</th></tr>` +
       s.derived.map(d => `<tr><td>(${d.p1.map(v => v.toFixed(0))}) → (${d.p2.map(v => v.toFixed(0))})</td><td class="num">${d.value.toFixed(1)}</td></tr>`).join("") + "</table>";
   }
-  h += `<table><tr><th>Opening</th><th>Type</th><th class="num">Width</th><th class="num">Sill</th><th class="num">Head</th><th class="num">Depth</th><th>Evidence</th></tr>` +
-    s.openings.map(o => `<tr><td>${esc(o.id)}</td><td>${o.type}</td><td class="num">${o.width.toFixed(0)}</td><td class="num">${o.sill.toFixed(0)}</td><td class="num">${o.head.toFixed(0)}</td><td class="num">${o.depth.toFixed(0)}</td><td>${esc(o.evidence.join("; "))}</td></tr>`).join("") + "</table>";
-  h += `<table><tr><th>Wall</th><th class="num">Length</th><th class="num">Thickness</th></tr>` +
-    s.walls_list.map(w => `<tr><td>${esc(w.id)}</td><td class="num">${w.length.toFixed(0)}</td><td class="num">${w.thickness.toFixed(0)}</td></tr>`).join("") + "</table>";
-  if (s.warnings.length) h += `<table><tr><th>Warnings</th></tr>${s.warnings.map(w => `<tr><td>${esc(w)}</td></tr>`).join("")}</table>`;
+  h += `<h3>Openings</h3><table><tr><th>Opening</th><th>Type</th><th class="num">Width</th><th class="num">Sill</th><th class="num">Head</th><th class="num">Depth</th><th>Evidence</th></tr>` +
+    s.openings.map(o => `<tr><td class="id">${esc(o.id)}</td><td>${o.type}</td><td class="num">${o.width.toFixed(0)}</td><td class="num">${o.sill.toFixed(0)}</td><td class="num">${o.head.toFixed(0)}</td><td class="num">${o.depth.toFixed(0)}</td><td>${esc(o.evidence.join("; "))}</td></tr>`).join("") + "</table>";
+  h += `<h3>Walls</h3><table><tr><th>Wall</th><th class="num">Length</th><th class="num">Thickness</th></tr>` +
+    s.walls_list.map(w => `<tr><td class="id">${esc(w.id)}</td><td class="num">${w.length.toFixed(0)}</td><td class="num">${w.thickness.toFixed(0)}</td></tr>`).join("") + "</table>";
+  if (s.warnings.length) h += `<h3>Warnings</h3><table>${s.warnings.map(w => `<tr><td style="color:var(--warn)">⚠ ${esc(w)}</td></tr>`).join("")}</table>`;
   $("vrep").innerHTML = h;
 }
 
@@ -321,24 +485,54 @@ document.querySelectorAll(".tabs button[data-tab]").forEach(b => b.onclick = () 
 });
 document.querySelectorAll("#dimtoggles input").forEach(i => i.onchange = () => $("v2d").classList.toggle("hide-" + i.dataset.dim, !i.checked));
 
+// ------------------------------------------------------------ workbench: side bar, shortcuts, panel sash
+function toggleSidebar(show) {
+  const sb = $("sidebar");
+  sb.hidden = show === undefined ? !sb.hidden : !show;
+  $("act-explorer").classList.toggle("on", !sb.hidden);
+  resize();
+}
+$("act-explorer").onclick = () => toggleSidebar();
+$("act-settings").onclick = () => {
+  toggleSidebar(true);
+  const panes = [...document.querySelectorAll("details.settings")];
+  const open = !panes.every(d => d.open);
+  panes.forEach(d => d.open = open);
+  $("act-settings").classList.toggle("on", open);
+  if (open) panes[0].scrollIntoView({ behavior: "smooth", block: "start" });
+};
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") { e.preventDefault(); toggleSidebar(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !$("go").disabled) { e.preventDefault(); $("go").click(); }
+});
+const sash = $("sash");
+sash.onpointerdown = (e) => {
+  sash.setPointerCapture(e.pointerId); sash.classList.add("drag");
+  const main = $("mainarea"), top = main.getBoundingClientRect();
+  sash.onpointermove = (m) => {
+    const h = Math.min(Math.max(top.bottom - m.clientY, 60), top.height - 120);
+    main.style.setProperty("--panel-h", h + "px"); resize();
+  };
+  sash.onpointerup = () => { sash.onpointermove = null; sash.classList.remove("drag"); };
+};
+
 // ------------------------------------------------------------ 3D viewer
 const host = $("v3d");
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 host.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
-const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-scene.background = new THREE.Color(dark ? 0x19191b : 0xf2f2ef);
+scene.background = new THREE.Color(0x1e1e1e);
 const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 1000);
 camera.position.set(8, 10, 12);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x888877, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(6, 12, 4); scene.add(sun);
-const grid = new THREE.GridHelper(40, 40, 0x999999, dark ? 0x333333 : 0xdddddd); scene.add(grid);
+const grid = new THREE.GridHelper(40, 40, 0x5a5a5a, 0x2d2d2d); scene.add(grid);
 let model = null;
 function resize() {
-  const w = host.clientWidth || 800, h = host.clientHeight || 520;
+  const w = host.clientWidth || 800, h = host.clientHeight || 400;
   renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(host);
@@ -355,7 +549,7 @@ function load3d(url) {
     const edges = [];
     model.traverse(o => { if (o.isMesh && o.name !== "floor") edges.push(o); });
     for (const m of edges) {
-      const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, 20), new THREE.LineBasicMaterial({ color: 0x555555 }));
+      const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, 20), new THREE.LineBasicMaterial({ color: 0x3c3c3c }));
       m.add(e);
     }
     scene.add(model);

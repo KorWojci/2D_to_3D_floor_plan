@@ -24,11 +24,13 @@ out of the box:
 docker build -t floorplan . && docker run -p 8000:8000 floorplan
 ```
 
-The page has four parts. You **import** a file (drag & drop) and can open optional
-settings. The **log** shows each step as it runs. The **preview** has three tabs: a 3D
-view you can orbit, the 2D plan with dimension layers you can switch on and off, and a
-report. **Downloads** lists the output files in the formats you picked, and you can add
-more formats to a finished job.
+The page is laid out like Visual Studio Code in dark mode:
+- **Side bar:** import a file (drag & drop), pick the output formats, download the results, and open the optional settings.
+- **Editor tabs:** the 3D preview you can orbit, the 2D plan with dimension layers you can switch on and off, and a report.
+- **OUTPUT panel:** the live log. Drag its top edge to resize it.
+- **Status bar:** the job state, the overall size and how the scale was found.
+
+`Ctrl+B` hides or shows the side bar, and `Ctrl+Enter` starts the conversion.
 
 Sample drawings with a known ground truth are in `samples/`. Regenerate them with
 `python samples/generate_samples.py`.
