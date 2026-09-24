@@ -97,7 +97,7 @@ Sample drawings with a known ground truth are in `samples/`. Regenerate them wit
 | **DWG** | converted to DXF with ODA File Converter or LibreDWG (`dwg2dxf`) |
 | **PDF** | vector drawings (lines, curves, fills, text); scanned pages are traced as images |
 | **SVG** | paths, shapes, transforms, text |
-| **PNG, JPG, BMP, TIFF, WEBP, GIF** | walls traced from solid (black) strokes and snapped to the drawing's axes; door swings, glazing and sliding doors read from the thin lines; **dimension texts read by OCR** (RapidOCR) and measured on their dimension lines; room names such as "taras"/"balcony" mark terrace doors |
+| **PNG, JPG, BMP, TIFF, WEBP, GIF** | walls recognised in any common drawing style (solid black, flat grey fill, diagonal or cross hatching, outlined walls between two lines, mixed styles) and snapped to the drawing's axes; pale coloured watermarks ignored; door swings (solid or dashed), glazing and sliding doors read from the thin lines; **dimension texts read by OCR** (RapidOCR) and measured on their dimension lines; **room area labels** ("12,71 m²", "A: 11,10 m²") check and correct the scale; room names such as "taras"/"balcony" mark terrace doors |
 | **OBJ, STL, PLY, OFF, GLB, glTF, 3MF, DAE, IFC** | the model is cut at 1.3 m; a low cut and vertical ray casts separate doors from windows and **measure real sill and head heights** |
 
 | Export 2D | Export 3D |
@@ -143,6 +143,9 @@ The report tab and the JSON export label every value as `stated`, `derived` or
 | OBJ / GLB / PLY / 3MF / IFC | exact | exact, sill and head measured from the model |
 | PNG 200 dpi with paper scale | ±0.4 % | ±1 px (≈ 6 mm) |
 | PNG with a known overall size | exact | ±1 px |
+| Flat, grey walls (`samples/real/flat_gray_walls.webp`) | scale from dimensions, confirmed by 3 room area labels | 2 windows, balcony door, swing doors with dashed arcs, entrance read as a passage |
+| House, cross-hatched + outlined walls (`samples/real/house_hatched.jpg`) | competing dimension readings, scale settled by the room area labels | 6 windows, swing doors; a few thin single-line partitions are not found |
+| House with a coloured watermark (`samples/real/house_watermark.jpg`) | 11.99 × 6.87 m against the dimensioned 11.90 × 6.88 m | 6 windows, swing doors; some thin hatched partitions read as openings, a few furniture outlines kept as walls |
 | Real estate-agent plan (`samples/real/house_plan.webp`, 676×806 px, ≈21 mm/px) | 9.03 m against the dimensioned 9.00 m (scale from the plan's own dimensions via OCR) | found: 5 windows, 7 swing doors (1 balcony door with side panel), 1 sliding terrace door (4.8 m), 1 entrance door; 1 swing door (boiler room) read as an open passage, 1 real passage |
 
 ## Development

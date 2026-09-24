@@ -116,6 +116,46 @@ def _run(line: np.ndarray, walls: np.ndarray, start: int, step: int, near: int, 
     return last, "edge"
 
 
+def _trace(m: np.ndarray, row: int, col: int, step: int, limit: int) -> int:
+    """Length of a stroke leaving the line at (row, col) upward (step -1) or downward (+1).
+    The stroke may be vertical or slanted (up to 45°): each row may shift one column,
+    keeping the direction it started with."""
+    n = 0
+    c = col
+    drift = 0
+    r = row + step
+    while 0 <= r < m.shape[0] and n < limit:
+        order = [drift, 0, -1, 1] if drift else [0, -1, 1]
+        for dc in order:
+            cc = c + dc
+            if 0 <= cc < m.shape[1] and m[r, cc]:
+                c = cc
+                if dc:
+                    drift = dc
+                break
+        else:
+            break
+        n += 1
+        r += step
+    return n
+
+
+def _stacked(t: dict, texts: list[dict]) -> bool:
+    """A number directly above or below another number (a size label such as 80/205)."""
+    for u in texts:
+        if u is t or u["vertical"] != t["vertical"] or not any(ch.isdigit() for ch in u["text"]):
+            continue
+        if t["vertical"]:
+            overlap = min(t["y1"], u["y1"]) - max(t["y0"], u["y0"])
+            gap = max(u["x0"] - t["x1"], t["x0"] - u["x1"])
+        else:
+            overlap = min(t["x1"], u["x1"]) - max(t["x0"], u["x0"])
+            gap = max(u["y0"] - t["y1"], t["y0"] - u["y1"])
+        if overlap > 0.5 * min(t["len"], u["len"]) and -2 <= gap <= 0.6 * t["h"]:
+            return True
+    return False
+
+
 def _area_label(t: dict, texts: list[dict]) -> bool:
     """A number right below a word (room name) is the room's area, not a dimension."""
     for u in texts:
@@ -143,6 +183,9 @@ def find_dimensions(texts: list[dict], ink: np.ndarray, walls: np.ndarray, log: 
         value, value_mm = parse_dimension_text(t["text"])
         if value is None or _area_label(t, merged):
             continue
+        if value < 10 and value == int(value) and value_mm is None and "." not in t["text"] and "," not in t["text"]:
+            continue  # a bare single digit is a label / room number / fragment, not a dimension
+        stacked = _stacked(t, merged)
         # work in a frame where the text reads horizontally: transpose for vertical text
         if t["vertical"]:
             m_ink, m_wall = ink.T, walls_near.T
@@ -182,16 +225,25 @@ def find_dimensions(texts: list[dict], ink: np.ndarray, walls: np.ndarray, log: 
         # tick marks: short strokes crossing the line; the dimension spans between the ticks
         ticks = []
         tmin = max(3, int(0.25 * h))
+        ups = {c: _trace(m_ink, row, c, -1, int(6 * h)) for c in range(lo - 3, hi + 4)}
+        downs = {c: _trace(m_ink, row, c, 1, int(6 * h)) for c in range(lo - 3, hi + 4)}
+        crossing = {c for c in ups if min(ups[c], downs[c]) >= 1.5 * h}  # long line crossing the dimension line
         for col in range(lo, hi + 1):
-            up = down = 0
-            while row - up - 1 >= 0 and m_ink[row - up - 1, col] and up < 6 * h:
-                up += 1
-            while row + down + 1 < m_ink.shape[0] and m_ink[row + down + 1, col] and down < 6 * h:
-                down += 1
-            # a tick is short, or an extension line ending just past the dimension line;
-            # long strokes on both sides (furniture edges crossing the line) are not ticks
+            up, down = ups[col], downs[col]
+            if any(c in crossing for c in range(col - 3, col + 4)):
+                continue
+            # a tick (straight or slanted "/" slash) is short, or an extension line ending just
+            # past the dimension line; long strokes on both sides (furniture edges) are not ticks
             if max(up, down) >= tmin and min(up, down) >= 1 and (up + down <= 1.3 * h or (min(up, down) <= 0.3 * h and max(up, down) >= 1.5 * h)):
                 ticks.append(col)
+        # a slanted tick touches several neighbouring columns: one tick per cluster
+        clustered: list[list[int]] = []
+        for c in ticks:
+            if clustered and c - clustered[-1][-1] <= 2:
+                clustered[-1].append(c)
+            else:
+                clustered.append([c])
+        ticks = [sum(g) / len(g) for g in clustered]
         left = [c for c in ticks if c < a0 - 1]
         right = [c for c in ticks if c > a1 + 1]
         # pixel index -> coordinate along the line: a tick is measured at its centre; a line
@@ -201,6 +253,8 @@ def find_dimensions(texts: list[dict], ink: np.ndarray, walls: np.ndarray, log: 
         s2 = min(right) + 0.5 if right else float(hi + 2 if how_hi == "wall" else hi + 1)
         if s2 - s1 < 0.8 * (a1 - a0):
             continue
+        if stacked and s2 - s1 <= 1.6 * (a1 - a0):
+            continue  # "80 / 205" size label: its fraction bar is not a dimension line
         if t["vertical"]:  # along = image row (y down), across = column
             p1, p2 = (row + 0.5, H - s2), (row + 0.5, H - s1)
             ang = 90.0

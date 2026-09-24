@@ -44,6 +44,18 @@ Each step says **what** has to be done and **how**. Code references are relative
   - Faint thin lines are kept in an ink mask for the door/window cues.
   - Walls drawn as outlines fall back to a Hough transform.
   - DPI is read from the file metadata.
+- [x] **Wall drawing styles in bitmaps.** How: `choose_wall_mask()` builds one candidate
+  mask per style and scores how much each looks like a wall network (thin, elongated,
+  spanning the drawing):
+  - solid black; flat grey fill (dominant mid tone); dark thick strokes;
+  - hatching: short slanted strokes (not parts of axis-aligned lines) mark a zone; small
+    paper cells bordered by those strokes are wall interior;
+  - outlined (hollow) walls: paper strips between two lines, used with hatched plans;
+  - parts of other styles joined to the chosen network are merged (mixed plans), unless
+    the wall continues in line beyond both ends (window frames, sills).
+- [x] **Watermarks.** How: light, saturated colours (and their JPEG halo) become paper.
+- [ ] **Thin single-line partitions** (one line, no fill) in bitmaps. How: pair long
+  parallel thin lines at 60–150 mm that run between two found walls.
 - [x] **3D models (OBJ/STL/PLY/OFF/GLB/glTF/3MF/DAE).** How:
   `importers/mesh_importer.py`.
   - Up axis: glTF is always Y-up; for other formats the smallest extent is taken as up.
@@ -105,8 +117,13 @@ Each step says **what** has to be done and **how**. Code references are relative
   ink between is a filled area.
 - [ ] **Angular / diagonal dimension chains.** How: extend the per-axis solver to any
   direction that has ≥2 parallel dimensions (group by angle instead of only x/y).
-- [ ] **Room-area texts as a consistency check.** How: compare "12.5 m²" labels with
-  the area of the polygon they sit in, and warn when they differ by more than 3 %.
+- [x] **Room-area texts as a consistency check.** How: `pipeline.room_area_factor()`.
+  - Rooms are the holes of the walls ∪ openings union; each area label ("12,71 m²",
+    "A: 11,10 m2") is matched to the room it lies in.
+  - A weighted consensus (±6 %) of √(label area / room area) gives a scale factor.
+  - Competing dimension clusters are decided by the room areas; otherwise a factor
+    beyond 2 % rescales the plan, and the rescaled plan must confirm it or the original
+    scale is kept.
 
 ## Phase 3: Walls and openings (`analysis/walls.py`, `analysis/openings.py`)
 - [x] **Wall segment selection.** How: use the wall layer when one exists (multilingual
@@ -149,6 +166,9 @@ Each step says **what** has to be done and **how**. Code references are relative
 - [x] **Door + fixed side panel** (balcony doors). How: leaf radii of 0.35 to 1.0 × the
   opening width are searched. The hinge may sit on either face or the centre line,
   slightly inside the jamb. Both the arc and the open leaf line must be drawn.
+- [x] **Dashed door swings in bitmaps.** How: with a clearly drawn leaf, 55 % of the arc
+  inked is enough; the hinge may sit up to 15 % of the width inside the jamb (door
+  frames drawn as posts). Not applied across glazing (frame lines look like dashes).
 - [~] **Bitmap door swings that are only partly drawn** (for example the boiler-room door
   in `samples/real/house_plan.webp`) are read as a passage. How: accept an arc alone when
   it is long (≥ 70 %) and ends at the jamb.

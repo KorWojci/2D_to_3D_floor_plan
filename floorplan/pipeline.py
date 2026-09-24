@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Iterable
+
+import numpy as np
+from typing import Any, Iterable, Optional
 
 from . import exporters, importers
 from .analysis import dimreport
@@ -56,6 +58,53 @@ def _scale_result(walls, openings, fw: float, fh: float) -> None:
             o.swing["r"] = o.swing["r"] * (fw + fh) / 2
 
 
+def room_area_factor(walls, openings, texts) -> tuple[Optional[float], int, int]:
+    """Scale correction factor from room area labels.
+
+    Rooms are the holes of the union of walls and openings.  Each area label is matched to the
+    room it lies in (labels sharing a room are summed - rooms merged by a missing wall).
+    Returns (factor, rooms agreeing, rooms matched); factor multiplies all lengths."""
+    import math
+
+    from shapely.geometry import Point, Polygon
+    from shapely.ops import unary_union
+
+    from .analysis.numbers import parse_area_text
+
+    labels = [(parse_area_text(t.text), t.x, t.y) for t in texts]
+    labels = [lab for lab in labels if lab[0]]
+    if len(labels) < 2:
+        return None, 0, 0
+    u = unary_union([Polygon(w.polygon).buffer(0) for w in walls] + [Polygon(o.polygon).buffer(0) for o in openings])
+    u = u.buffer(30, join_style=2).buffer(-30, join_style=2)  # close pixel seams
+    holes = [Polygon(r) for g in getattr(u, "geoms", [u]) for r in g.interiors]
+    rooms: dict[int, float] = {}
+    counts: dict[int, int] = {}
+    for a, x, y in labels:
+        p = Point(x, y)
+        for i, h in enumerate(holes):
+            if h.contains(p):
+                rooms[i] = rooms.get(i, 0.0) + a
+                counts[i] = counts.get(i, 0) + 1
+                break
+    if not rooms:
+        return None, 0, 0
+    items = [(math.sqrt(a * 1e6 / holes[i].area), a, counts[i]) for i, a in rooms.items() if holes[i].area > 0]
+    f = np.array([it[0] for it in items])
+    wts = np.array([it[1] for it in items])  # large rooms measure the scale best
+    best, best_w, best_i = None, 0.0, None
+    for c in f:
+        inl = np.abs(f / c - 1) <= 0.06
+        if wts[inl].sum() > best_w:
+            best_w, best_i = float(wts[inl].sum()), inl
+            best = float(np.average(f[inl], weights=wts[inl]))
+    n_ok = int(best_i.sum()) if best_i is not None else 0
+    n_labels = int(sum(it[2] for it, ok in zip(items, best_i) if ok)) if best_i is not None else 0
+    if best_w < 0.5 * wts.sum() or (n_ok < 2 and n_labels < 3):
+        return None, n_ok, len(f)
+    return best, n_ok, len(f)
+
+
 def analyse(path: Path, settings: Settings, log: Log) -> tuple[Plan, Drawing, Calibration]:
     log.step(f"Reading {path.name}")
     drawing = importers.load(path, settings, log)
@@ -68,6 +117,56 @@ def analyse(path: Path, settings: Settings, log: Log) -> tuple[Plan, Drawing, Ca
     log.step("Detecting walls, doors and windows")
     walls, openings, _ = detect(dmm, settings, log)
 
+    # room area labels ("12,71 m²") check the scale: rooms are the holes of walls + openings
+    trusted = cal.confidence == "dimensions" and int(cal.info.get("dimensions_used", 0)) >= 4 \
+        and cal.method == "dimensions"
+    if walls and not (settings.known_width_mm or settings.known_height_mm) and cal.confidence != "user" \
+            and cal.info.get("alt_scales_mm") and not trusted:
+        f0, n0, _ = room_area_factor(walls, openings, dmm.texts)
+        if f0 is None or abs(f0 - 1) > 0.05:
+            # dimensions gave competing scales: let the room areas decide
+            for alt in cal.info["alt_scales_mm"]:
+                cal2 = calibrate(drawing, settings, Log(), forced_scale=alt)
+                dmm2 = _apply(drawing, cal2.fx, cal2.fy, cal2.inv_fx, cal2.inv_fy, cal2.scale)
+                w2, o2, _ = detect(dmm2, settings, Log())
+                f2, n2, _ = room_area_factor(w2, o2, dmm2.texts)
+                if f2 is not None and abs(f2 - 1) <= 0.1 and n2 >= max(2, n0):
+                    log.info(f"Dimensions suggested competing scales; room area labels ({n2} rooms) select "
+                             f"{alt:.4g} mm/px instead of {cal.scale:.4g}")
+                    cal2.method, cal2.confidence = "dimensions + room areas", "dimensions"
+                    cal, dmm, walls, openings = cal2, dmm2, w2, o2
+                    fx, fy, ifx, ify = cal.fx, cal.fy, cal.inv_fx, cal.inv_fy
+                    break
+
+    if walls and not (settings.known_width_mm or settings.known_height_mm) and cal.confidence != "user":
+        before = (fx, fy, ifx, ify, cal.k, cal.method, cal.confidence, dmm, walls, openings)
+        confirmed = False
+        for attempt in range(4):
+            f, n_ok, n_all = room_area_factor(walls, openings, dmm.texts)
+            if f is None:
+                break
+            if abs(f - 1) <= 0.02:
+                log.info(f"Room area labels confirm the scale ({n_ok} of {n_all} room(s), {abs(f - 1):.1%} difference)")
+                confirmed = True
+                break
+            if trusted or attempt == 3:
+                log.warn(f"Room area labels suggest the scale is off by {f - 1:+.1%} ({n_ok} room(s)) - "
+                         "keeping the written dimensions")
+                break
+            log.info(f"Room area labels ({n_ok} of {n_all} room(s)) correct the scale by {f - 1:+.1%}")
+            cal.k *= f  # fx/fy are the calibration's own mappings: they follow k
+            cal.method = "room area labels" if attempt == 0 and cal.confidence != "dimensions" else cal.method + " + room areas"
+            cal.confidence = "dimensions"
+            dmm = _apply(drawing, fx, fy, ifx, ify, cal.scale)
+            walls, openings, _ = detect(dmm, settings, log)
+            if not walls:
+                break
+        if attempt > 0 and not confirmed and not trusted:
+            # the rescaled plan does not confirm the correction (other rooms now agree, or none):
+            # the labels are not consistent enough to override the dimensions
+            log.info("Room area labels do not confirm the corrected scale - keeping the original scale")
+            fx, fy, ifx, ify, cal.k, cal.method, cal.confidence, dmm, walls, openings = before
+
     if walls and (settings.known_width_mm or settings.known_height_mm):
         for attempt in range(3):
             fw, fh = _size_factors(walls, settings)
@@ -76,8 +175,10 @@ def analyse(path: Path, settings: Settings, log: Log) -> tuple[Plan, Drawing, Ca
                 if cal.confidence == "dimensions" and max(abs(fw - 1), abs(fh - 1)) > 0.01:
                     log.warn(f"The size you entered differs from the drawing's own dimensions by "
                              f"{max(abs(fw - 1), abs(fh - 1)):.1%} - using your value")
-            fx, fy, ifx, ify = _compose(fx, fy, ifx, ify, fw, fh)
-            cal.k *= (fw + fh) / 2
+            # the mean factor goes into k (which fx/fy follow), the anisotropic rest is composed
+            s_ = (fw + fh) / 2
+            cal.k *= s_
+            fx, fy, ifx, ify = _compose(fx, fy, ifx, ify, fw / s_, fh / s_)
             if max(abs(fw - 1), abs(fh - 1)) > 0.05 and attempt < 2:
                 # large change: detect again so thickness/opening limits apply to the right scale
                 dmm = _apply(drawing, fx, fy, ifx, ify, cal.scale)

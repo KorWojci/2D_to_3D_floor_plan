@@ -61,6 +61,16 @@ def _swing_default(fr: Line, s1: float, s2: float, v2: float) -> dict[str, Any]:
     return {"hinge": hinge, "r": s2 - s1, "a0": a0 % 360, "a1": (a0 + 90) % 360, "assumed": True}
 
 
+def _exterior(ctx: "OpeningContext", fr, p1, p2, depth: float) -> bool:
+    """Whether the wall at this gap has the outside of the building on one side."""
+    if ctx.footprint is None:
+        return False
+    off = depth / 2 + 400
+    return any(not ctx.footprint.contains(Point(p1[0] + fr.n[0] * sgn * off + (p2[0] - p1[0]) / 2,
+                                               p1[1] + fr.n[1] * sgn * off + (p2[1] - p1[1]) / 2))
+               for sgn in (1, -1))
+
+
 def classify_gap(g: GapCandidate, ctx: OpeningContext, s: Settings, require_evidence: bool = False) -> Optional[Opening]:
     fr = g.wl.frame
     w = g.s2 - g.s1
@@ -120,19 +130,19 @@ def classify_gap(g: GapCandidate, ctx: OpeningContext, s: Settings, require_evid
     # 4. bitmap ink
     cue = ctx.cue
     if typ is None and cue is not None and hasattr(cue, "door_swing"):
-        sc, leaf, swing_found = 0.0, w, None
+        sc, leaf, swing_found, arc_ink = 0.0, w, None, 0.0
         need = 0.8 if g.source == "end" else 0.6
         for sv, other in ((g.s1, g.s2), (g.s2, g.s1)):
             into = 1 if other > sv else -1
-            for vv, inset in [(vv, i) for vv in (g.v1, g.v2, vm) for i in (0.0, 0.04 * w)]:
+            for vv, inset in [(vv, i) for vv in (g.v1, g.v2, vm) for i in (0.0, 0.04 * w, 0.1 * w, 0.15 * w)]:
                 hinge = fr.world(sv + into * inset, vv)  # hinge may sit a little inside the jamb
                 closed = fr.u * into
                 # the leaf may be narrower than the opening (door + fixed side panel) or half of
                 # it (double door)
-                for f in (1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4, 0.35):
-                    v, side = cue.door_swing(hinge, f * w, closed, fr.n)
+                for f in (1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.6, 0.5, 0.45, 0.4, 0.35):
+                    v, side, ar = cue.door_swing(hinge, f * w, closed, fr.n)
                     if v > sc + 0.05 or (v >= sc and f > leaf / w):
-                        sc, leaf = v, f * w
+                        sc, leaf, arc_ink = v, f * w, ar
                         a_closed = math.degrees(math.atan2(closed[1], closed[0])) % 360
                         a_open = math.degrees(math.atan2(fr.n[1] * side, fr.n[0] * side)) % 360
                         ccw = (a_open - a_closed) % 360 < 180
@@ -141,22 +151,21 @@ def classify_gap(g: GapCandidate, ctx: OpeningContext, s: Settings, require_evid
         gl = cue.glazing(p1, p2, fr.n, depth)
         if leaf < 0.85 * w and gl >= 0.6:
             need = max(need, 0.85)  # door + side panel next to glazing: demand a clear symbol
+        if gl >= 0.6 and arc_ink < 0.7:
+            sc = min(sc, arc_ink)  # a "dashed arc" across glazing is frame and sill lines
         if sc >= need and (sc >= gl or leaf < 0.95 * w):
             typ = "door"
             swing = swing_found
             evidence.append(f"door swing in image ({sc:.0%})" + (f", leaf {leaf:.0f} mm + side panel" if leaf < 0.85 * w and sc < gl + 0.5 else ""))
-        elif gl >= 0.6:
+        elif gl >= 0.6 or (gl >= 0.45 and _exterior(ctx, fr, p1, p2, depth)):
+            # (thin frames in an exterior wall are often partly merged into the wall outline)
             typ = "window"
             evidence.append(f"glazing in image ({gl:.0%})")
 
     # 4a. windows only exist in exterior walls: an interior opening with lines in it is a door
     #     (leaf drawn in the opening) unless a window block/layer says otherwise
     if typ == "window" and ctx.footprint is not None and "window block/layer" not in evidence:
-        off = depth / 2 + 400
-        outside = any(not ctx.footprint.contains(Point(p1[0] + fr.n[0] * sgn * off + (p2[0] - p1[0]) / 2,
-                                                      p1[1] + fr.n[1] * sgn * off + (p2[1] - p1[1]) / 2))
-                      for sgn in (1, -1))
-        if not outside:
+        if not _exterior(ctx, fr, p1, p2, depth):
             typ = "door"
             evidence.append("interior wall - not a window")
 
@@ -195,6 +204,8 @@ def classify_gap(g: GapCandidate, ctx: OpeningContext, s: Settings, require_evid
     if typ is None:
         if require_evidence:
             return None
+        if w > 1600:
+            return None  # a wide gap without any symbol is where two walls end, not a recess
         typ = "passage"  # a recess to door height without a door leaf
         evidence.append("gap in wall (no door symbol found)")
     if typ == "door" and swing is None:

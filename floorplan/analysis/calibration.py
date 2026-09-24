@@ -228,6 +228,21 @@ def _consensus(ratios: np.ndarray, weights: np.ndarray, tol: float) -> float:
     return best
 
 
+def _area_scale(d: Drawing, log: Log) -> Optional[float]:
+    """mm per pixel from room area labels (area written in the room / its pixel area)."""
+    samples = d.meta.get("room_areas") or []
+    vals = np.array([math.sqrt(a * 1e6 / px) for _, a, px in samples if px > 0])
+    if len(vals) < 2:
+        return None
+    s = _consensus(vals, np.ones(len(vals)), 0.05)
+    agree = int((np.abs(vals / s - 1) <= 0.05).sum())
+    if agree < 2 or agree < 0.4 * len(vals):
+        log.info(f"Room area labels do not agree on a scale ({len(vals)} room(s)) - not used")
+        return None
+    log.info(f"Room area labels: {agree} of {len(vals)} room(s) agree on {s:.4g} mm/px")
+    return s
+
+
 def _snap_k(k: float) -> Optional[tuple[str, float]]:
     for name, val in UNITS.items():
         if abs(k / val - 1) < 0.03:
@@ -255,6 +270,7 @@ def calibrate(d: Drawing, settings: Settings, log: Log, forced_scale: Optional[f
     log.info(f"{len(dims)} usable dimension(s) found in the drawing")
 
     user_unit = settings.units if settings.units in UNITS else None
+    area_s = _area_scale(d, log) if d.raster else None
 
     if dims:
         # dimensions may be written in different units ("3,35 m" next to "335"): compare
@@ -294,13 +310,30 @@ def calibrate(d: Drawing, settings: Settings, log: Log, forced_scale: Optional[f
         if spread > 0.005:
             log.info(f"Drawing is not exactly to scale (dimension/drawn ratios vary up to {spread:.1%}) - "
                      "geometry will be adjusted to the written dimensions")
+        if area_s and (len(good) < 3 or abs(k * r / area_s - 1) > 0.06):
+            log.warn(f"Scale from dimensions ({k * r:.4g} mm/px, {len(good)} dimension(s)) disagrees with the room "
+                     f"areas written in the plan ({area_s:.4g} mm/px) - using the room areas")
+            return Calibration(1.0, area_s, AxisMap(area_s), AxisMap(area_s), "room area labels", "dimensions", "mm")
+        if area_s:
+            log.info(f"Room area labels confirm the scale ({area_s:.4g} mm/px, {abs(k * r / area_s - 1):.1%} difference)")
         cal = Calibration(k, r, AxisMap(r), AxisMap(r), "dimensions", "dimensions", unit)
         cal.info["dimensions_used"] = len(good)
+        # other scales supported by a group of dimensions (checked later against room areas)
+        w_all = np.array([m.geom_length for m in dims])
+        alts: list[float] = []
+        for rr in sorted(set(np.round(ratios, 6)), key=lambda v: -w_all[np.abs(ratios / v - 1) <= 0.04].sum()):
+            inl = np.abs(ratios / rr - 1) <= 0.04
+            if inl.sum() >= 1 and abs(rr / r - 1) > 0.1 and all(abs(rr / a - 1) > 0.1 for a in alts) \
+                    and w_all[inl].sum() >= 0.2 * w_all[np.abs(ratios / r - 1) <= 0.04].sum():
+                alts.append(float(np.median(ratios[inl])))
+        cal.info["alt_scales_mm"] = [round(k * a, 6) for a in alts[:3]]
         cal.info["dimensions_rejected"] = len(rejected)
         _fit_axes(cal, good, extent_raw, d.raster, log)
         return cal
 
     # ---- no dimensions
+    if area_s and not settings.paper_scale:
+        return Calibration(1.0, area_s, AxisMap(area_s), AxisMap(area_s), "room area labels", "dimensions", "mm")
     if user_unit and not d.meta.get("is_paper"):
         k = UNITS[user_unit]
         log.info(f"No dimensions - using drawing units chosen by user: {user_unit}")

@@ -164,3 +164,38 @@ def test_real_estate_agent_bitmap():
     assert kinds.count("door") >= 8
     terrace = [o for o in plan.openings if o.width > 4000]
     assert len(terrace) == 1 and terrace[0].type == "door" and abs(terrace[0].width - 4800) < 60
+
+
+@pytest.mark.skipif(not _has_ocr(), reason="rapidocr-onnxruntime not installed")
+def test_flat_with_grey_filled_walls():
+    """samples/real/flat_gray_walls.webp: flat grey wall fill, dashed door swings, area labels."""
+    plan, _, cal = analyse(ROOT / "samples" / "real" / "flat_gray_walls.webp", Settings(), Log())
+    assert cal.confidence == "dimensions"
+    x0, y0, x1, y1 = plan.bbox()
+    assert abs((x1 - x0) - 9990) < 150 and abs((y1 - y0) - 7530) < 150
+    kinds = [o.type for o in plan.openings]
+    assert kinds.count("window") == 2
+    assert kinds.count("door") >= 4
+
+
+@pytest.mark.skipif(not _has_ocr(), reason="rapidocr-onnxruntime not installed")
+def test_house_with_hatched_and_outlined_walls():
+    """samples/real/house_hatched.jpg: cross-hatched insulation + outlined (hollow) walls; the
+    written dimensions compete, room area labels ("A: 11,10 m²") settle the scale."""
+    plan, _, _ = analyse(ROOT / "samples" / "real" / "house_hatched.jpg", Settings(), Log())
+    x0, y0, x1, y1 = plan.bbox()
+    assert abs((x1 - x0) - 17400) < 500 and abs((y1 - y0) - 11000) < 500
+    kinds = [o.type for o in plan.openings]
+    assert kinds.count("window") >= 5
+    assert kinds.count("door") >= 6
+
+
+@pytest.mark.skipif(not _has_ocr(), reason="rapidocr-onnxruntime not installed")
+def test_house_with_watermark():
+    """samples/real/house_watermark.jpg: pale colour watermark over a hatched plan (11,90 × 6,88 m)."""
+    plan, _, _ = analyse(ROOT / "samples" / "real" / "house_watermark.jpg", Settings(), Log())
+    x0, y0, x1, y1 = plan.bbox()
+    assert abs((x1 - x0) - 11990) < 120 and abs((y1 - y0) - 6880) < 120
+    kinds = [o.type for o in plan.openings]
+    assert kinds.count("window") >= 5
+    assert kinds.count("door") >= 6

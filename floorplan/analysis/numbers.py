@@ -9,6 +9,7 @@ UNIT_MM = {"mm": 1.0, "cm": 10.0, "dm": 100.0, "m": 1000.0, "in": 25.4, '"': 25.
 _MTEXT_CODES = re.compile(r"\\[A-Za-z][^;\\]*;|\\[PpNn~]|[{}]")
 _NUM = r"\d+(?:[.,]\d+)?"
 _METRIC = re.compile(rf"^\s*(?:[A-Za-z]{{1,3}}\s*[=:]\s*)?({_NUM})\s*(mm|cm|dm|m)?\s*$", re.I)
+AREA = re.compile(r"(?:A\s*[:=]\s*)?(\d+(?:[.,]\d+)?)\s*m\s*(?:²|2|\^2)\b|A\s*[:=]\s*(\d+(?:[.,]\d+)?)", re.I)
 _FT_IN = re.compile(r"^\s*(\d+)\s*'\s*-?\s*(\d+(?:\.\d+)?)?\s*(?:(\d+)/(\d+))?\s*\"?\s*$")
 _IN = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:\"|in)\s*$")
 
@@ -31,7 +32,8 @@ def parse_dimension_text(text: str) -> tuple[Optional[float], Optional[float]]:
     if not t or re.search(r"m\s*[²2]|sq|%|°|ø|Ø|\+|x\s*\d|\d\s*x", t, re.I):
         return None, None
     m = _FT_IN.match(t)
-    if m:
+    if m and float(m.group(1)) > 0 and (m.group(2) or m.group(3) or t.rstrip().endswith("'")):
+        # (OCR sometimes reads a comma as an apostrophe: "0'96" is not 0 ft 96 in)
         ft = float(m.group(1))
         inch = float(m.group(2) or 0)
         if m.group(3):
@@ -60,3 +62,13 @@ def parse_dimension_text(text: str) -> tuple[Optional[float], Optional[float]]:
     if unit:
         return v, v * UNIT_MM[unit]
     return v, None
+
+
+def parse_area_text(text: str) -> Optional[float]:
+    """Room area labels: "12,71 m²", "A: 11,10 m2", "A: 4,58" -> square metres."""
+    t = clean_text(text)
+    m = AREA.search(t)
+    if not m:
+        return None
+    v = float((m.group(1) or m.group(2)).replace(",", "."))
+    return v if 0.5 <= v <= 500 else None
