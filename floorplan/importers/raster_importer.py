@@ -290,7 +290,11 @@ def hatch_mask(inku: np.ndarray) -> Optional[np.ndarray]:
     slanted = lines & (axis == 0)
     diag = np.zeros(inku.shape, np.uint8)
     for ang in (25, 35, 45, 55, 65, 115, 125, 135, 145, 155):
-        diag |= cv2.morphologyEx(slanted, cv2.MORPH_OPEN, _line_kernel(ang, 5))
+        da = cv2.morphologyEx(slanted, cv2.MORPH_OPEN, _line_kernel(ang, 5))
+        # hatching is several parallel strokes close together; a letter or an arc has one or
+        # two strokes per direction
+        dens = cv2.boxFilter(da.astype(np.float32), -1, (15, 15), normalize=False)
+        diag |= da & (cv2.dilate((dens >= 18).astype(np.uint8), np.ones((5, 5), np.uint8)))
     if diag.sum() < 200:
         return None
     zone = cv2.dilate(diag, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))) > 0
@@ -351,8 +355,13 @@ def _fills_opening(m: np.ndarray, box) -> bool:
     return a.size > 0 and b.size > 0 and a.mean() >= 0.5 and b.mean() >= 0.5
 
 
+WALL_STYLES = ("", "black", "flat", "hatch", "hollow", "dark")
+STYLE_LABELS = {"black": "solid black", "flat": "flat grey fill", "hatch": "diagonal hatching",
+                "hollow": "outline only (two lines)", "dark": "thick dark strokes"}
+
+
 def choose_wall_mask(img: np.ndarray, ink: np.ndarray, thin: int, text_mask: np.ndarray,
-                     log: Log) -> tuple[np.ndarray, int, str]:
+                     log: Log) -> tuple[np.ndarray, int, str, np.ndarray]:
     """Walls are drawn in many styles.  Build one candidate mask per style and keep the one
     that looks most like a wall network:
 
@@ -360,6 +369,9 @@ def choose_wall_mask(img: np.ndarray, ink: np.ndarray, thin: int, text_mask: np.
     * ``flat``: walls filled with one flat grey tone (lines and text are black);
     * ``hatch``: walls filled with diagonal hatching (single or crossed);
     * ``dark``: any thick dark stroke (generic fallback).
+
+    Returns (mask, kernel, main style, style map); the style map holds the index of
+    ``WALL_STYLES`` that produced each wall pixel (0 = not a wall).
     """
     H, W = img.shape
     ys, xs = np.nonzero(ink)
@@ -404,10 +416,11 @@ def choose_wall_mask(img: np.ndarray, ink: np.ndarray, thin: int, text_mask: np.
         if name in scored and scored[name][0] >= 0.8 * best:
             sc, m, kk, info = scored[name]
             break
-    label = {"black": "solid black", "flat": "flat grey fill", "hatch": "hatching", "dark": "thick dark strokes"}[name]
+    label = STYLE_LABELS[name]
     log.info(f"Walls recognised as {label} ({info}); "
              + ", ".join(f"{n}: {v[0] / max(best, 1):.0%}" for n, v in scored.items()))
     m = _drop_isolated_blobs(m, ref)
+    style = m.astype(np.uint8) * WALL_STYLES.index(name)
     # hollow walls (two parallel lines, nothing between) are not in any candidate: find them as
     # thin paper strips enclosed by lines, no thicker than the walls already found
     t_typ = 0.0
@@ -428,8 +441,8 @@ def choose_wall_mask(img: np.ndarray, ink: np.ndarray, thin: int, text_mask: np.
         if not t_typ and m.any():
             dtm = cv2.distanceTransform(m, cv2.DIST_L2, 3)
             t_typ = 4.0 * float(dtm[dtm > 0].mean())
-        if other != "hollow" and scored[other][0] < 0.2 * best:
-            continue  # this style is not really used in the drawing
+        if other != "hollow" and scored[other][0] < 0.05 * best:
+            continue  # this style is not really used in the drawing (parts are still gated below)
         extra = (scored[other][1] > 0) & ~(m > 0)
         n2, lab2, st2, _ = cv2.connectedComponentsWithStats(extra.astype(np.uint8), 8)
         touch = cv2.dilate(m, rect(5)) > 0
@@ -444,10 +457,33 @@ def choose_wall_mask(img: np.ndarray, ink: np.ndarray, thin: int, text_mask: np.
             if hit[j] > 0 and elongated and max(w_, h_) >= 8 * kk and lo_t <= thick2[j] <= hi_t \
                     and not _fills_opening(m, st2[j]):
                 m[lab2 == j] = 1
+                style[lab2 == j] = WALL_STYLES.index(other)
                 added += 1
     if added:
         log.info(f"Added {added} wall part(s) drawn in another style (e.g. hatched partitions)")
-    return m, kk, name
+    m = _strip_stubs(m, kk, text_mask)
+    style[m == 0] = 0
+    return m, kk, name, style
+
+
+def _strip_stubs(m: np.ndarray, kk: int, text_mask: Optional[np.ndarray] = None) -> np.ndarray:
+    """Remove small pieces glued to the walls (radiator brackets, door stops, jamb ticks):
+    parts that a small opening removes and that are short, not long thin walls."""
+    if not m.any():
+        return m
+    dt = cv2.distanceTransform(m, cv2.DIST_L2, 3)
+    t_min = max(3.0, 2.0 * float(np.percentile(dt[dt >= 1], 25)))  # thinnest walls
+    k = max(3, int(0.7 * t_min))
+    core = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
+    rest = (m > 0) & (core == 0)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(rest.astype(np.uint8), 8)
+    small = np.zeros(n, bool)
+    small[1:] = np.maximum(st[1:, cv2.CC_STAT_WIDTH], st[1:, cv2.CC_STAT_HEIGHT]) < max(4 * k, 3 * t_min)
+    out = m.copy()
+    out[small[lab] & rest] = 0
+    if text_mask is not None:
+        out[text_mask & rest] = 0  # labels written against a wall
+    return out
 
 
 def room_area_samples(texts: list[dict], walls: np.ndarray, log: Log) -> list[tuple[str, float, float]]:
@@ -488,6 +524,47 @@ def room_area_samples(texts: list[dict], walls: np.ndarray, log: Log) -> list[tu
         out.append((t["text"], a, float(st[j, cv2.CC_STAT_AREA])))
     if out:
         log.info(f"Room area labels matched to {len(out)} closed room(s)")
+    return out
+
+
+def render_cleaned(style: np.ndarray, dims: list, H: int) -> np.ndarray:
+    """The plan stripped to what the model is built from: walls (drawn per recognised pattern)
+    and the dimensions read from the drawing.  Furniture, fixtures, symbols and labels are gone."""
+    out = np.full(style.shape + (3,), 255, np.uint8)
+    look = {"black": (30, 30, 30), "flat": (125, 125, 125), "hatch": (255, 255, 255),
+            "hollow": (235, 235, 235), "dark": (60, 60, 60)}
+    for i, name in enumerate(WALL_STYLES):
+        if i and (style == i).any():
+            out[style == i] = look[name]
+    hatch = style == WALL_STYLES.index("hatch")
+    if hatch.any():
+        stripes = np.zeros(style.shape, bool)
+        yy, xx = np.indices(style.shape)
+        stripes[(xx + yy) % 6 < 2] = True
+        out[hatch & stripes] = (40, 40, 40)
+    walls = (style > 0).astype(np.uint8)
+    edge = walls - cv2.erode(walls, np.ones((3, 3), np.uint8))
+    out[edge > 0] = (0, 0, 0)
+    blue = (200, 110, 30)
+    for dm in dims:
+        a = math.radians(dm.angle)
+        u = np.array([math.cos(a), math.sin(a)])
+        lp = np.array(dm.line_pos if dm.line_pos is not None else dm.p1, float)
+        pts = []
+        for p in (dm.p1, dm.p2):
+            p = np.array(p, float)
+            q = lp + u * float(np.dot(p - lp, u))  # the point on the dimension line
+            pts.append((p, q))
+        img_pt = lambda v: (int(round(v[0])), int(round(H - v[1])))  # noqa: E731
+        cv2.line(out, img_pt(pts[0][1]), img_pt(pts[1][1]), blue, 1, cv2.LINE_AA)
+        for p, q in pts:
+            cv2.line(out, img_pt(p), img_pt(q), blue, 1, cv2.LINE_AA)
+            n = np.array([u[1], -u[0]]) + u
+            cv2.line(out, img_pt(q - 4 * n), img_pt(q + 4 * n), blue, 1, cv2.LINE_AA)
+        mid = img_pt((pts[0][1] + pts[1][1]) / 2)
+        fs = max(0.45, max(style.shape) / 2500)
+        cv2.putText(out, dm.text, (mid[0] + 3, mid[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, fs, blue,
+                    1 + int(fs > 0.9), cv2.LINE_AA)
     return out
 
 
@@ -539,7 +616,7 @@ def import_image_array(img: np.ndarray, settings: Settings, log: Log, dpi: Optio
     for t in texts:
         if len(t["text"]) >= 2 or t["text"].isdigit():
             text_mask[max(0, int(t["y0"]) - 2):int(t["y1"]) + 3, max(0, int(t["x0"]) - 2):int(t["x1"]) + 3] = True
-    walls, k, mode = choose_wall_mask(img, ink, thin, text_mask, log)
+    walls, k, mode, style = choose_wall_mask(img, ink, thin, text_mask, log)
     wall_share = walls.sum() / max(ink.sum(), 1)
 
     d = Drawing(source_format="image", raster=True, pixel_size=1.0)
@@ -609,6 +686,15 @@ def import_image_array(img: np.ndarray, settings: Settings, log: Log, dpi: Optio
     if texts:
         d.dims = find_dimensions(texts, (ink | faint) & ~walls.astype(bool), walls.astype(bool), log)
         d.meta["room_areas"] = room_area_samples(texts, walls, log)
+    # the cleaned plan: only walls and dimensions (shown to the user as a processing step)
+    used = [n for i, n in enumerate(WALL_STYLES) if i and (style == i).any()]
+    log.step("Cleaning the plan: keeping walls and dimensions only")
+    log.info("Wall patterns found: " + ", ".join(
+        f"{STYLE_LABELS[n]} ({(style == WALL_STYLES.index(n)).sum() / max(walls.sum(), 1):.0%})" for n in used)
+        + f"; {len(d.dims)} dimension(s) kept; furniture, fixtures, symbols and labels removed")
+    ok, png = cv2.imencode(".png", render_cleaned(style, d.dims, H))
+    if ok:
+        d.meta["cleaned_png"] = png.tobytes()
     d.meta["image_size"] = (W, H)
     if dpi:
         d.meta["paper_unit_mm"] = 25.4 / dpi

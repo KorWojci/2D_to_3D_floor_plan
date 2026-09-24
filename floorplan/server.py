@@ -201,7 +201,7 @@ def export_more(jid: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _file(job: Job, name: str) -> Path:
-    allowed = {f["name"] for f in job.files} | {"preview.svg", "preview.glb", "plan.json"}
+    allowed = {f["name"] for f in job.files} | {"preview.svg", "preview.glb", "preview_cleaned.png", "plan.json"}
     if name not in allowed:
         raise HTTPException(404, "No such file")
     p = job.dir / "out" / name
@@ -220,8 +220,8 @@ def download(jid: str, name: str) -> FileResponse:
 @app.get("/api/jobs/{jid}/preview/{name}")
 def preview(jid: str, name: str) -> FileResponse:
     job = _job(jid)
-    if name not in ("preview.svg", "preview.glb"):
+    if name not in ("preview.svg", "preview.glb", "preview_cleaned.png"):
         raise HTTPException(404, "No such preview")
     p = _file(job, name)
-    media = "image/svg+xml" if name.endswith(".svg") else "model/gltf-binary"
+    media = {"svg": "image/svg+xml", "glb": "model/gltf-binary", "png": "image/png"}[name.rsplit(".", 1)[1]]
     return FileResponse(p, media_type=media)

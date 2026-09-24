@@ -122,6 +122,8 @@
   #v2d svg { width: 100%; height: 100%; display: block; }
   #v2d.hide-computed #dims-computed, #v2d.hide-derived #dims-derived, #v2d.hide-stated #dims-stated { display: none; }
   #vrep { overflow: auto; padding: 16px 26px; }
+  #vclean { overflow: auto; background: #fff; filter: invert(.88) hue-rotate(180deg); }
+  #vclean img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--muted); pointer-events: none; }
   .empty svg { opacity: .25; }
   .empty kbd { font: 11px var(--mono); background: #3a3d41; border: 1px solid #555; border-bottom-width: 2px; border-radius: 3px; padding: 1px 5px; color: var(--text); }
@@ -286,6 +288,7 @@
       <div class="tabs" role="tablist">
         <button data-tab="v3d" class="on" role="tab"><span class="ext" style="color:#4ec9b0">3D</span>preview.glb</button>
         <button data-tab="v2d" role="tab"><span class="ext" style="color:#e2c08d">2D</span>plan.svg</button>
+        <button data-tab="vclean" role="tab" id="tab-clean" hidden title="The bitmap stripped to walls and dimensions - what the model is built from"><span class="ext" style="color:#a074c4">IMG</span>cleaned.png</button>
         <button data-tab="vrep" role="tab"><span class="ext" style="color:#519aba">i</span>report.md</button>
         <span class="spacer"></span>
         <div class="toggles" id="viewtoggles" title="Show / hide in the preview (exported files are not affected)">
@@ -301,6 +304,7 @@
       <div class="view">
         <div id="v3d"></div>
         <div id="v2d" hidden></div>
+        <div id="vclean" hidden><img id="cleanimg" alt="Plan cleaned to walls and dimensions"></div>
         <div id="vrep" hidden></div>
         <div class="empty" id="empty">
           <svg width="120" height="120" viewBox="0 0 16 16"><path d="M1 1h14v14H1z M3 3v10h4V9h2v4h4V3z" fill="#cccccc" fill-rule="evenodd"/></svg>
@@ -448,6 +452,10 @@ async function finished(j) {
   load3d(`/api/jobs/${j.id}/preview/preview.glb?${Date.now()}`);
   const svg = await (await fetch(`/api/jobs/${j.id}/preview/preview.svg`)).text();
   $("v2d").innerHTML = svg;
+  const cleaned = j.files.some(f => f.name.endsWith("_cleaned.png"));
+  $("tab-clean").hidden = !cleaned;
+  if (cleaned) $("cleanimg").src = `/api/jobs/${j.id}/preview/preview_cleaned.png?${Date.now()}`;
+  else if (!$("vclean").hidden) document.querySelector('.tabs button[data-tab="v3d"]').click();
   report(j.summary);
 }
 
@@ -487,7 +495,7 @@ function report(s) {
 // ------------------------------------------------------------ tabs
 document.querySelectorAll(".tabs button[data-tab]").forEach(b => b.onclick = () => {
   document.querySelectorAll(".tabs button[data-tab]").forEach(x => x.classList.toggle("on", x === b));
-  for (const id of ["v3d", "v2d", "vrep"]) $(id).hidden = id !== b.dataset.tab;
+  for (const id of ["v3d", "v2d", "vclean", "vrep"]) $(id).hidden = id !== b.dataset.tab;
   $("dimtoggles").hidden = b.dataset.tab !== "v2d";
   $("viewtoggles").hidden = b.dataset.tab !== "v3d";
   if (b.dataset.tab === "v3d") resize();

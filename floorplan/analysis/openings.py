@@ -134,8 +134,20 @@ def classify_gap(g: GapCandidate, ctx: OpeningContext, s: Settings, require_evid
         need = 0.8 if g.source == "end" else 0.6
         for sv, other in ((g.s1, g.s2), (g.s2, g.s1)):
             into = 1 if other > sv else -1
-            for vv, inset in [(vv, i) for vv in (g.v1, g.v2, vm) for i in (0.0, 0.04 * w, 0.1 * w, 0.15 * w)]:
-                hinge = fr.world(sv + into * inset, vv)  # hinge may sit a little inside the jamb
+            # the hinge may sit inside the jamb (door frames drawn as posts): scan insets in
+            # 2 px steps (ink is sampled with 1 px tolerance) and keep those with a leaf line
+            step = max(2.0 * getattr(cue, "scale", 1.0), 0.01 * w)
+            cands = []
+            for vv in (g.v1, g.v2, vm):
+                for inset in np.arange(0.0, 0.16 * w, step):
+                    h = fr.world(sv + into * inset, vv)
+                    lr = max(cue.ink_ratio([(h[0] + fr.n[0] * sg * t * w, h[1] + fr.n[1] * sg * t * w)
+                                            for t in np.linspace(0.2, 0.7, 8)]) for sg in (1, -1))
+                    cands.append((lr, inset == 0.0, vv, inset))
+            cands.sort(key=lambda c: (-c[0], not c[1]))
+            keep = cands[:4] + [c for c in cands if c[1]]  # best leaf lines + the plain jamb corners
+            for _, _, vv, inset in keep:
+                hinge = fr.world(sv + into * inset, vv)
                 closed = fr.u * into
                 # the leaf may be narrower than the opening (door + fixed side panel) or half of
                 # it (double door)
@@ -151,13 +163,14 @@ def classify_gap(g: GapCandidate, ctx: OpeningContext, s: Settings, require_evid
         gl = cue.glazing(p1, p2, fr.n, depth)
         if leaf < 0.85 * w and gl >= 0.6:
             need = max(need, 0.85)  # door + side panel next to glazing: demand a clear symbol
-        if gl >= 0.6 and arc_ink < 0.7:
+        glazed = gl >= 0.6 or (gl >= 0.45 and _exterior(ctx, fr, p1, p2, depth))
+        if glazed and arc_ink < 0.7:
             sc = min(sc, arc_ink)  # a "dashed arc" across glazing is frame and sill lines
         if sc >= need and (sc >= gl or leaf < 0.95 * w):
             typ = "door"
             swing = swing_found
             evidence.append(f"door swing in image ({sc:.0%})" + (f", leaf {leaf:.0f} mm + side panel" if leaf < 0.85 * w and sc < gl + 0.5 else ""))
-        elif gl >= 0.6 or (gl >= 0.45 and _exterior(ctx, fr, p1, p2, depth)):
+        elif glazed:
             # (thin frames in an exterior wall are often partly merged into the wall outline)
             typ = "window"
             evidence.append(f"glazing in image ({gl:.0%})")

@@ -167,15 +167,21 @@ def test_real_estate_agent_bitmap():
 
 
 @pytest.mark.skipif(not _has_ocr(), reason="rapidocr-onnxruntime not installed")
-def test_flat_with_grey_filled_walls():
-    """samples/real/flat_gray_walls.webp: flat grey wall fill, dashed door swings, area labels."""
-    plan, _, cal = analyse(ROOT / "samples" / "real" / "flat_gray_walls.webp", Settings(), Log())
-    assert cal.confidence == "dimensions"
-    x0, y0, x1, y1 = plan.bbox()
-    assert abs((x1 - x0) - 9990) < 150 and abs((y1 - y0) - 7530) < 150
-    kinds = [o.type for o in plan.openings]
+def test_flat_with_grey_filled_walls(tmp_path):
+    """samples/real/flat_gray_walls.webp: grey exterior walls + hatched partitions, dashed door
+    swings with jamb posts, area labels; the cleaned plan (walls + dimensions) is produced."""
+    from floorplan.pipeline import run
+
+    log = Log()
+    res = run(ROOT / "samples" / "real" / "flat_gray_walls.webp", Settings(), ["svg"], tmp_path, log)
+    patterns = next(e["msg"] for e in log.entries if e["msg"].startswith("Wall patterns found"))
+    assert "flat grey fill" in patterns and "diagonal hatching" in patterns
+    assert (tmp_path / "flat_gray_walls_cleaned.png").stat().st_size > 1000
+    s = res["summary"]
+    assert abs(s["size_mm"][0] - 9950) < 150 and abs(s["size_mm"][1] - 7540) < 150
+    kinds = [o["type"] for o in s["openings"]]
     assert kinds.count("window") == 2
-    assert kinds.count("door") >= 4
+    assert kinds.count("door") == 5
 
 
 @pytest.mark.skipif(not _has_ocr(), reason="rapidocr-onnxruntime not installed")

@@ -53,6 +53,9 @@ Each step says **what** has to be done and **how**. Code references are relative
   - outlined (hollow) walls: paper strips between two lines, used with hatched plans;
   - parts of other styles joined to the chosen network are merged (mixed plans), unless
     the wall continues in line beyond both ends (window frames, sills).
+- [x] **Cleaned plan step.** How: `render_cleaned()` draws the recognised walls (per
+  pattern) and the OCR dimensions on a blank page; shown in the UI (`cleaned.png` tab)
+  and downloadable. Stubs glued to walls and labels touching walls are stripped first.
 - [x] **Watermarks.** How: light, saturated colours (and their JPEG halo) become paper.
 - [ ] **Thin single-line partitions** (one line, no fill) in bitmaps. How: pair long
   parallel thin lines at 60–150 mm that run between two found walls.

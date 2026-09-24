@@ -110,6 +110,28 @@ Sample drawings with a known ground truth are in `samples/`. Regenerate them wit
 Every import format is converted to one clean, layered plan in millimetres. That plan
 is then written out as DXF/DWG, so any input can be "mapped to DWG".
 
+## Cleaned plan (bitmaps)
+
+Before the model is built, a bitmap plan is reduced to **walls and dimensions only**:
+furniture, fixtures, electrical symbols, labels and watermarks are dropped. The result is
+shown in the `cleaned.png` tab and can be downloaded as `<name>_cleaned.png`. The log
+lists the wall patterns found and their share, e.g.
+`Wall patterns found: flat grey fill (83%), diagonal hatching (17%)`.
+
+| Pattern | How it is recognised |
+|---|---|
+| solid black | pixels ≤ 40 grey, opened to drop thin lines |
+| flat grey fill | the dominant mid-grey tone (±10) |
+| diagonal / cross hatching | several parallel slanted strokes close together, not part of axis-aligned lines; the cells between them and the wall outlines are filled |
+| outline only (two lines) | paper strips between two parallel lines, as thick as the other walls (only with hatched plans) |
+| thick dark strokes | fallback for anything else drawn heavy |
+
+Each style is scored as a wall network (thin, elongated, spanning the drawing); the best
+one is the main style and wall parts of the other styles that join it are merged (grey
+exterior walls + hatched partitions). Small pieces stuck to walls (radiator brackets,
+labels) and frame/sill strips that continue a wall across a window are removed.
+Door and window symbols are still read from the original image.
+
 ## How the dimensions are kept correct
 
 1. **Dimensions are read.** These are real DIMENSION entities, plus numbers written on

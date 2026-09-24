@@ -233,13 +233,19 @@ def export_all(plan: Plan, formats: Iterable[str], out_dir: Path, stem: str, log
 
 
 def run(path: Path, settings: Settings, formats: Iterable[str], out_dir: Path, log: Log) -> dict[str, Any]:
-    plan, _, _ = analyse(path, settings, log)
+    plan, drawing, _ = analyse(path, settings, log)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "plan.json").write_text(plan.to_json(), encoding="utf-8")
     stem = Path(path).stem
     (out_dir / "stem.txt").write_text(stem, encoding="utf-8")
     files = export_all(plan, formats, out_dir, stem, log)
-    return {"files": files, "summary": summary(plan)}
+    cleaned = drawing.meta.get("cleaned_png")
+    if cleaned:  # bitmaps: the plan stripped to walls + dimensions
+        (out_dir / "preview_cleaned.png").write_bytes(cleaned)
+        name = f"{stem}_cleaned.png"
+        (out_dir / name).write_bytes(cleaned)
+        files.append({"format": "png", "name": name, "size": len(cleaned)})
+    return {"files": files, "summary": summary(plan), "cleaned": bool(cleaned)}
 
 
 def summary(plan: Plan) -> dict[str, Any]:
